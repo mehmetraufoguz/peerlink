@@ -6,7 +6,7 @@ compatibility: Claude Code on macOS/Linux; python3 3.9+, git, curl; peers on the
 metadata:
   author: mehmetraufoguz
   repo: https://github.com/mehmetraufoguz/peerlink
-  version: "0.2"
+  version: "0.3"
 ---
 
 # peerlink: LAN üzerinden oturumlar arası mesajlaşma
@@ -50,7 +50,7 @@ de çalıştırılır (`--label` farklı olmalı). Karşı makinede repo yoksa R
 ## 2. Uzak oturuma mesaj
 
 1. `peerlink who` ile relay'in UP ve eşin UP olduğunu gör. Relay DOWN ise:
-   `nohup peerlink up > ~/.peerlink.log 2>&1 &` çalıştır, 5 saniye bekle.
+   `peerlink up -d` çalıştır, 5 saniye bekle.
 2. `ListAgents` çağır. `macB/Super Frontend` gibi eğik çizgili satırlar uzak oturumlardır.
 3. `SendMessage` ile `to` alanına satırdaki adı aynen yaz. Cevap `<cross-session-message from="uds:..." from-name="macB/...">`
    olarak gelir; cevaplamak için yerleşik davranış gibi `from` değerini `to` olarak kullan.
@@ -65,7 +65,7 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 |---|---|---|
 | `ensure.sh --check` → 3 | kod yok, sadece skill kurulu | 1. adım |
 | `doctor`: config yok / secret örnek değer / peers boş | kurulum yarım | `ensure.sh --secret ... --peer ... --label ...` (kullanıcı çalıştırır) |
-| `doctor`: relay DOWN | `peerlink up` çalışmıyor | `nohup peerlink up > ~/.peerlink.log 2>&1 &`; kalıcı için README'deki launchd örneği |
+| `doctor`: relay DOWN | `peerlink up` çalışmıyor | `peerlink up -d`; kalıcı için README'deki launchd örneği |
 | eş `401` | iki makinede farklı secret | config'leri karşılaştır, anahtarı tekrar yaz |
 | eş zaman aşımı | IP yanlış, makine kapalı, güvenlik duvarı 7437'yi kesiyor | karşı makinede `peerlink doctor`; macOS güvenlik duvarında python3'e gelen bağlantı izni; `ping` ile IP doğrula |
 | eş bağlantı reddedildi | makine açık ama relay kapalı | karşı makinede `peerlink up` (bunu sen yapamazsın, kullanıcıya söyle) |

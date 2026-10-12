@@ -11,7 +11,8 @@ karşı relay onu gerçek oturumun Unix socket'ine native protokolle teslim eder
 Cevaplar aynı yolu ters yönde izler (from alanı her iki tarafta proxy yoluna yeniden yazılır).
 
 Komutlar:
-  peerlink up      relay'i başlat   [--secret S] [--peer HOST[:PORT]]... [--port 7437] [--label NAME]
+  peerlink up [-d] relay'i başlat (-d: arka planda, log ~/.peerlink.log)
+  peerlink down    relay'i durdur;  peerlink restart  config değişince
   peerlink who     kim var: relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar  [--host HOST]
   peerlink send    macB/"Oturum adı" "metin"   proxy'siz tek seferlik gönderim (cevap dönmez)
   peerlink doctor  ortamı denetle (python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler)
@@ -29,13 +30,15 @@ güvendiğin LAN'da kullan; istersen önüne bir TLS reverse proxy koy.
 import argparse, glob, hashlib, http.client, json, os, re, secrets, signal, socket, subprocess, sys, threading, time, urllib.parse, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 SESS_DIR = os.path.expanduser("~/.claude/sessions")
 SOCK_DIR = "/tmp/cc-socks"
 PROXY_MARK = "peerlinkProxy"
 SECRET_HEADER = "X-Peerlink-Secret"
 CONFIG_PATH = os.path.expanduser("~/.config/peerlink/config.json")
+PID_PATH = os.path.expanduser("~/.config/peerlink/relay.pid")
+LOG_PATH = os.path.expanduser("~/.peerlink.log")
 DEFAULT_PORT = 7437
 HOSTNAME = socket.gethostname().split(".")[0]
 CLAUDE_VERSION_TESTED = "2.1.296"
@@ -221,6 +224,7 @@ class FakePeer:
 
 def cmd_proxy(a):
     """Uzak oturum (a.remote_host, a.remote_pid) için yerel sahte peer. Gelen çerçeveleri karşı relay'e iletir."""
+    a.secret = a.secret or os.environ.get("PEERLINK_SECRET") or sys.exit("proxy: secret yok (PEERLINK_SECRET)")
     peer = FakePeer(a.name, {"host": a.remote_host, "port": a.remote_port, "remotePid": a.remote_pid,
                              "remoteName": a.remote_name, "label": a.remote_label})
     def bye(*_): peer.cleanup(); sys.exit(0)
@@ -278,10 +282,11 @@ class Relay:
             if p and p.poll() is None: return
             cmd = [sys.executable, os.path.abspath(__file__), "proxy", "--name", self.proxy_name(label, remote_name),
                    "--remote-host", host, "--remote-port", str(port), "--remote-pid", str(remote_pid),
-                   "--remote-name", remote_name, "--remote-label", label, "--secret", self.a.secret,
+                   "--remote-name", remote_name, "--remote-label", label,
                    "--local-host", self.a.advertise, "--local-port", str(self.a.port), "--label", self.a.label,
                    "--interval", str(self.a.interval)]
-            self.proxies[key] = subprocess.Popen(cmd)
+            # secret komut satırına değil ortam değişkenine (ps'te görünmesin)
+            self.proxies[key] = subprocess.Popen(cmd, env={**os.environ, "PEERLINK_SECRET": self.a.secret})
             log(f"spawned proxy for {label}/{remote_name} (remote pid {remote_pid})")
 
     def proxy_sock_for(self, label, remote_pid):
@@ -505,7 +510,7 @@ def cmd_doctor(a, cfg):
         ok(f"relay UP: label={h['label']} v{h['version']} proxies={h['proxies']}")
         if h["label"] != label: warn(f"çalışan relay'in etiketi ({h['label']}) config'ten ({label}) farklı; eski config ile başlatılmış")
     except Exception as e:
-        fail(f"relay DOWN (127.0.0.1:{port}: {e.__class__.__name__})", "peerlink up   (arka plan: nohup peerlink up > ~/.peerlink.log 2>&1 &)")
+        fail(f"relay DOWN (127.0.0.1:{port}: {e.__class__.__name__})", "peerlink up -d")
     ok(f"proxy oturum: {len(prox)}") if prox else (warn("hiç proxy yok: eşler erişilemiyor ya da orada oturum yok") if relay_up else None)
 
     for pth in peers:
@@ -549,6 +554,16 @@ def cmd_clean(a, cfg):
     print(f"removed {n} stale proxy file(s)")
 
 
+def relay_health(port, timeout=1.5):
+    try: return http_json("127.0.0.1", port, "", "GET", "/health", timeout=timeout)
+    except Exception: return None
+
+
+def read_pid():
+    try: return int(open(PID_PATH).read().strip())
+    except Exception: return None
+
+
 def cmd_up(a, cfg):
     a.secret = need_secret(a, cfg)
     a.peer = peer_list(a, cfg)
@@ -562,8 +577,64 @@ def cmd_up(a, cfg):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("10.255.255.255", 1)); a.advertise = s.getsockname()[0]
         except Exception:
             a.advertise = "127.0.0.1"
+    h = relay_health(a.port)
+    if h:
+        print(f"relay zaten çalışıyor: label={h['label']} v{h['version']} port={a.port} (pid {read_pid() or '?'}); yeniden başlatmak için: peerlink restart")
+        sys.exit(0)
+    if getattr(a, "daemon", False):
+        # Çocuk süreç için argümanları çözümlenmiş değerlerden kur (sys.argv'yi kopyalama: restart kendine dönerdi).
+        # secret komut satırına yazılmaz (ps'te görünmesin); ortam değişkeniyle geçer.
+        argv = (["--config", a.config] if a.config else []) + ["up", "--port", str(a.port), "--bind", a.bind,
+                "--label", a.label, "--interval", str(a.interval), "--advertise", a.advertise]
+        for pr in a.peer: argv += ["--peer", pr]
+        os.makedirs(os.path.dirname(PID_PATH), exist_ok=True)
+        logf = open(LOG_PATH, "ab")
+        p = subprocess.Popen([sys.executable, os.path.abspath(__file__)] + argv, stdout=logf, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True, env={**os.environ, "PEERLINK_SECRET": a.secret})
+        for _ in range(30):
+            time.sleep(0.2)
+            if relay_health(a.port): break
+        else:
+            print(f"relay başlamadı; log: {LOG_PATH}"); sys.exit(1)
+        print(f"relay arka planda: label={a.label} port={a.port} pid={p.pid} log={LOG_PATH}")
+        return
     if not a.peer: log("uyarı: hiç eş (--peer) verilmedi; relay gelen mesajları kabul eder ama proxy oluşturmaz")
-    Relay(a).serve()
+    os.makedirs(os.path.dirname(PID_PATH), exist_ok=True)
+    with open(PID_PATH, "w") as f: f.write(str(os.getpid()))
+    try:
+        Relay(a).serve()
+    finally:
+        try: os.unlink(PID_PATH)
+        except FileNotFoundError: pass
+
+
+def cmd_down(a, cfg):
+    port = int(resolve(a, cfg, "port", DEFAULT_PORT))
+    pid = read_pid()
+    if pid and pid_alive(pid):
+        os.kill(pid, signal.SIGTERM)
+    else:
+        # pidfile yok/eski: aynı dosyadan çalışan "up" süreçlerini bul
+        me = os.path.abspath(__file__)
+        out = subprocess.run(["pgrep", "-f", f"{me} up"], capture_output=True, text=True).stdout.split()
+        for x in out:
+            if int(x) != os.getpid(): os.kill(int(x), signal.SIGTERM)
+        pid = out[0] if out else None
+    for _ in range(25):
+        if not relay_health(port, 0.5): break
+        time.sleep(0.2)
+    else:
+        print("relay hâlâ cevap veriyor; elle: pkill -f 'relay.py up'"); sys.exit(1)
+    try: os.unlink(PID_PATH)
+    except FileNotFoundError: pass
+    cmd_clean(a, cfg)
+    print("relay durdu" if pid else "relay zaten çalışmıyordu")
+
+
+def cmd_restart(a, cfg):
+    cmd_down(a, cfg)
+    a.daemon = True
+    cmd_up(a, cfg)
 
 
 def main(argv=None):
@@ -578,6 +649,10 @@ def main(argv=None):
 
     up = common(sub.add_parser("up", help="relay'i başlat; uzak oturumlar ListAgents'ta görünür"))
     up.add_argument("--bind"); up.add_argument("--advertise", help="bu makinenin LAN IP'si"); up.add_argument("--label"); up.add_argument("--interval", type=float)
+    up.add_argument("-d", "--daemon", action="store_true", help=f"arka planda çalıştır (log: {LOG_PATH})")
+    common(sub.add_parser("down", help="arka plandaki relay'i durdur ve proxy kayıtlarını temizle"))
+    rs = common(sub.add_parser("restart", help="down + up -d (config değişince)"))
+    rs.add_argument("--bind"); rs.add_argument("--advertise"); rs.add_argument("--label"); rs.add_argument("--interval", type=float)
 
     who = common(sub.add_parser("who", help="kim var: relay durumu, yerel oturumlar, proxy'ler, eşler"))
     who.add_argument("--host", help="yalnızca bu uzak makinenin oturumlarını listele")
@@ -590,14 +665,15 @@ def main(argv=None):
     common(sub.add_parser("doctor", help="ortamı denetle: python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler"))
 
     p = sub.add_parser("proxy")
-    for f in ("--name", "--remote-host", "--remote-name", "--remote-label", "--secret", "--local-host", "--label"): p.add_argument(f, required=True)
+    for f in ("--name", "--remote-host", "--remote-name", "--remote-label", "--local-host", "--label"): p.add_argument(f, required=True)
+    p.add_argument("--secret", help="(dahili) normalde PEERLINK_SECRET ortam değişkeniyle gelir")
     p.add_argument("--remote-port", type=int, required=True); p.add_argument("--remote-pid", type=int, required=True)
     p.add_argument("--local-port", type=int, required=True); p.add_argument("--interval", type=float, default=5)
 
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
-    {"up": cmd_up, "who": cmd_who, "send": cmd_send, "clean": cmd_clean, "doctor": cmd_doctor,
-     "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
+    {"up": cmd_up, "down": cmd_down, "restart": cmd_restart, "who": cmd_who, "send": cmd_send, "clean": cmd_clean,
+     "doctor": cmd_doctor, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":

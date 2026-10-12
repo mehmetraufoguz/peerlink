@@ -3,6 +3,8 @@
 #
 #   ./install.sh                                   # yalnızca CLI + skill (config varsa dokunmaz)
 #   ./install.sh --secret S --peer 192.168.1.20 --label macA   # config'i de yazar
+#   --no-start: relay'i (yeniden) başlatma
+# Her çalıştırma idempotent: CLI/skill/PATH'i onarır, config tamamsa relay'i yeniden başlatır, doktoru çalıştırır.
 #
 # Bağımlılık yok: pipx varsa onunla, yoksa bu klasöre işaret eden bir sarmalayıcı betikle kurar.
 set -euo pipefail
@@ -12,9 +14,10 @@ CFG_DIR="$HOME/.config/peerlink"
 CFG="$CFG_DIR/config.json"
 SKILL_DST="$HOME/.claude/skills/peerlink"
 
-SECRET="" LABEL="" PEERS=() PORT=7437
+SECRET="" LABEL="" PEERS=() PORT=7437 START=1
 while [ $# -gt 0 ]; do
   case "$1" in
+    --no-start) START=0; shift ;;
     --secret) SECRET="$2"; shift 2 ;;
     --peer)   PEERS+=("$2"); shift 2 ;;
     --label)  LABEL="$2"; shift 2 ;;
@@ -99,6 +102,21 @@ else
   echo "config: $CFG mevcut, dokunulmadı"
 fi
 
-echo
-echo "bitti. sonraki adım:  peerlink up        (arka plan: nohup peerlink up > ~/.peerlink.log 2>&1 &)"
-echo "kontrol:              peerlink who"
+# 4) Relay: config tamamsa (yeniden) başlat ve doktoru çalıştır
+PL="$BIN/peerlink"
+if [ "$START" = 1 ] && python3 - "$CFG" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+ok = bool(c.get("secret")) and not str(c.get("secret", "")).startswith("DEGISTIR") and bool(c.get("peers"))
+sys.exit(0 if ok else 1)
+PY
+then
+  echo
+  "$PL" restart || true
+  echo
+  "$PL" doctor || true
+else
+  echo
+  echo "relay başlatılmadı: config eksik (secret/peers). Doldurup:  peerlink up -d"
+  echo "kontrol:  peerlink doctor"
+fi

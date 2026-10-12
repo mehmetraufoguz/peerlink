@@ -41,22 +41,25 @@ Her makine kendi anahtarını üretirse relay'ler birbirine 401 döner (`peerlin
 # Makine A (192.168.1.10)
 curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
   | bash -s -- --secret <ANAHTAR> --peer 192.168.1.20 --label macA
-peerlink up
 ```
 
 ```bash
 # Makine B (192.168.1.20)
 curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
   | bash -s -- --secret <ANAHTAR> --peer 192.168.1.10 --label macB
-peerlink up
 ```
+
+Kurulum bittiğinde relay arka planda çalışır ve `peerlink doctor` çıktısı görünür; her iki makinede de
+"HAZIR" diyorsa iş tamam. Komut tekrar çalıştırılabilir: var olan kurulumu günceller, PATH'i onarır, config'i
+yeniden yazar ve relay'i yeniden başlatır.
 
 `bootstrap.sh` repoyu `~/.peerlink` altına klonlar (veya günceller) ve `install.sh`'i çalıştırır:
 `~/.local/bin/peerlink` komutu (PATH'te değilse `~/.zshrc`/`~/.bashrc`'ye bir kez eklenir), `~/.claude/skills/peerlink` skill symlink'i ve
 `~/.config/peerlink/config.json`. Bağımlılık yok; pipx varsa onu kullanır, yoksa klona işaret eden bir
 sarmalayıcı yazar. Python 3.9+ ve git yeter.
 
-`peerlink up` ön planda çalışır; arka plan için `nohup peerlink up > ~/.peerlink.log 2>&1 &` ya da
+`peerlink up -d` relay'i arka planda başlatır (log `~/.peerlink.log`); `peerlink down` durdurur,
+`peerlink restart` config değişince yeniden başlatır. Oturum açılışında otomatik başlatmak için
 [launchd/com.peerlink.plist.example](launchd/com.peerlink.plist.example). Birkaç saniye sonra `peerlink who`
 eşi `UP` göstermeli.
 
@@ -82,7 +85,8 @@ Kurulum yapmadan da çalışır: `python3 -m peerlink <komut>` (repo kökünden)
 ## Kullanım
 
 ```bash
-peerlink up                                      # relay'i başlat (ön planda); arka plan için nohup/launchd
+peerlink up -d                                   # relay'i arka planda başlat (log ~/.peerlink.log); -d'siz ön planda
+peerlink down / restart                          # durdur / config değişince yeniden başlat
 peerlink who                                     # relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar
 peerlink who --host 192.168.1.20                 # yalnızca o makinenin oturumları
 peerlink send macB/"Super Frontend" "merhaba"    # proxy'siz tek seferlik gönderim (cevap dönmez)
