@@ -14,6 +14,7 @@ Komutlar:
   peerlink up      relay'i başlat   [--secret S] [--peer HOST[:PORT]]... [--port 7437] [--label NAME]
   peerlink who     kim var: relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar  [--host HOST]
   peerlink send    macB/"Oturum adı" "metin"   proxy'siz tek seferlik gönderim (cevap dönmez)
+  peerlink doctor  ortamı denetle (python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler)
   peerlink clean   ölü proxy kayıtlarını temizle
   peerlink proxy   (dahili; relay tarafından spawn edilir)
 
@@ -28,7 +29,7 @@ güvendiğin LAN'da kullan; istersen önüne bir TLS reverse proxy koy.
 import argparse, glob, hashlib, http.client, json, os, re, secrets, signal, socket, subprocess, sys, threading, time, urllib.parse, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 SESS_DIR = os.path.expanduser("~/.claude/sessions")
 SOCK_DIR = "/tmp/cc-socks"
@@ -449,6 +450,87 @@ def cmd_send(a, cfg):
     print(f"-> {t['name']} @ {h}:{prt}: {'ok' if r.get('ok') else r}")
 
 
+def cmd_doctor(a, cfg):
+    """Ortamı denetle; her satır ok/warn/FAIL ile başlar, sonda sonraki adım önerilir. Çıkış kodu: FAIL varsa 1."""
+    fails, warns, hints = [], [], []
+    def ok(m, _hint=None): print(f"  ok    {m}")
+    def warn(m, hint=None): warns.append(m); print(f"  warn  {m}"); hint and hints.append(hint)
+    def fail(m, hint=None): fails.append(m); print(f"  FAIL  {m}"); hint and hints.append(hint)
+
+    print("peerlink doctor")
+    v = sys.version_info
+    (ok if v >= (3, 9) else fail)(f"python {v.major}.{v.minor}" + ("" if v >= (3, 9) else " (3.9+ gerekli)"))
+    try:
+        cv = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=5).stdout.strip().split()[0]
+        (ok if cv == CLAUDE_VERSION_TESTED else warn)(f"claude {cv}" + ("" if cv == CLAUDE_VERSION_TESTED else f" (test edilen {CLAUDE_VERSION_TESTED}; proxy'ler ListAgents'ta görünmezse protokol değişmiş olabilir)"))
+    except Exception:
+        warn("claude CLI bulunamadı (PATH'te değil?)")
+    bindir = os.path.expanduser("~/.local/bin")
+    if not any(os.path.exists(os.path.join(d, "peerlink")) for d in os.environ.get("PATH", "").split(":")):
+        warn("'peerlink' PATH'te yok", f"export PATH=\"{bindir}:$PATH\"  (veya python3 -m peerlink / python3 ~/.peerlink/peerlink/relay.py kullan)")
+    else:
+        ok("peerlink PATH'te")
+
+    port = resolve(a, cfg, "port", DEFAULT_PORT)
+    secret = resolve(a, cfg, "secret", env="PEERLINK_SECRET")
+    peers = peer_list(a, cfg)
+    label = resolve(a, cfg, "label", HOSTNAME)
+    if not os.path.exists(CONFIG_PATH):
+        fail(f"config yok: {CONFIG_PATH}", "install.sh --secret <S> --peer <IP> --label <ad>   (kullanıcı kendisi çalıştırsın; anahtar sohbete yazılmasın)")
+    else:
+        ok(f"config: {CONFIG_PATH}")
+        if not secret: fail("config'te secret yok")
+        elif secret.startswith("DEGISTIR"): fail("config'teki secret örnek değer", "gerçek anahtar: openssl rand -hex 24  (iki makinede aynı)")
+        if not peers: fail("config'te peers boş", "en az bir eş IP'si gerekli: --peer 192.168.1.20")
+        if label == HOSTNAME and not cfg.get("label"): warn(f"label verilmedi, hostname kullanılacak: {HOSTNAME}")
+
+    if os.path.isdir(SOCK_DIR):
+        st = os.stat(SOCK_DIR)
+        (ok if st.st_uid == os.getuid() and (st.st_mode & 0o077) == 0 else fail)(f"{SOCK_DIR} (uid={st.st_uid}, mode={oct(st.st_mode & 0o777)})")
+    else:
+        warn(f"{SOCK_DIR} yok: bu makinede hiç Claude Code oturumu çalışmıyor")
+    sess = local_sessions(include_proxies=True)
+    real = [s for s in sess if not s["proxy"]]; prox = [s for s in sess if s["proxy"]]
+    (ok if real else warn)(f"yerel oturum: {len(real)}" + ("" if real else " (uzak taraf sana yazamaz, sen yazabilirsin)"))
+    stale = 0
+    for p in glob.glob(f"{SESS_DIR}/*.json"):
+        try: r = json.load(open(p))
+        except Exception: continue
+        if r.get(PROXY_MARK) and not pid_alive(int(r.get("pid", 0))): stale += 1
+    (warn if stale else ok)(f"ölü proxy kaydı: {stale}", "peerlink clean" if stale else None)
+
+    relay_up = False
+    try:
+        h = http_json("127.0.0.1", port, "", "GET", "/health", timeout=2); relay_up = True
+        ok(f"relay UP: label={h['label']} v{h['version']} proxies={h['proxies']}")
+        if h["label"] != label: warn(f"çalışan relay'in etiketi ({h['label']}) config'ten ({label}) farklı; eski config ile başlatılmış")
+    except Exception as e:
+        fail(f"relay DOWN (127.0.0.1:{port}: {e.__class__.__name__})", "peerlink up   (arka plan: nohup peerlink up > ~/.peerlink.log 2>&1 &)")
+    ok(f"proxy oturum: {len(prox)}") if prox else (warn("hiç proxy yok: eşler erişilemiyor ya da orada oturum yok") if relay_up else None)
+
+    for pth in peers:
+        h, prt = split_host(pth, port)
+        try:
+            r = http_json(h, prt, secret or "", "GET", "/sessions", timeout=3)
+            if r.get("label") == label: fail(f"eş {h}:{prt} etiketi seninle aynı ({label}); etiketler makine başına benzersiz olmalı", "--label farklı bir ad")
+            else: ok(f"eş {h}:{prt} UP label={r['label']} oturum={len(r['sessions'])}")
+        except RuntimeError as e:
+            if "401" in str(e): fail(f"eş {h}:{prt} 401: gizli anahtar uyuşmuyor", "iki makinede aynı secret olmalı")
+            else: fail(f"eş {h}:{prt} hata: {e}")
+        except socket.timeout:
+            fail(f"eş {h}:{prt} zaman aşımı: IP yanlış, makine kapalı ya da güvenlik duvarı {prt} portunu kesiyor", "karşı makinede: peerlink doctor; macOS güvenlik duvarında python3'e gelen bağlantı izni")
+        except ConnectionRefusedError:
+            fail(f"eş {h}:{prt} bağlantı reddedildi: makine açık ama relay çalışmıyor", "karşı makinede: peerlink up")
+        except Exception as e:
+            fail(f"eş {h}:{prt} {e.__class__.__name__}: {e}")
+
+    print()
+    if hints:
+        print("sonraki adım:"); [print(f"  - {x}") for x in dict.fromkeys(hints)]
+    print(f"{'SORUN VAR' if fails else 'HAZIR'}: {len(fails)} hata, {len(warns)} uyarı")
+    sys.exit(1 if fails else 0)
+
+
 def cmd_clean(a, cfg):
     n = 0
     for p in glob.glob(f"{SESS_DIR}/*.json"):
@@ -499,6 +581,7 @@ def main(argv=None):
     send.add_argument("to", help="'etiket/oturum adı' (veya --host ile yalnızca ad)"); send.add_argument("text")
 
     sub.add_parser("clean", help="ölü proxy kayıtlarını sil")
+    common(sub.add_parser("doctor", help="ortamı denetle: python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler"))
 
     p = sub.add_parser("proxy")
     for f in ("--name", "--remote-host", "--remote-name", "--remote-label", "--secret", "--local-host", "--label"): p.add_argument(f, required=True)
@@ -507,7 +590,8 @@ def main(argv=None):
 
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
-    {"up": cmd_up, "who": cmd_who, "send": cmd_send, "clean": cmd_clean, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
+    {"up": cmd_up, "who": cmd_who, "send": cmd_send, "clean": cmd_clean, "doctor": cmd_doctor,
+     "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":

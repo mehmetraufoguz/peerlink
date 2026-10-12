@@ -40,11 +40,15 @@ case ":$PATH:" in *":$BIN:"*) ;; *) echo "uyarı:  $BIN PATH'te değil; kabuk rc
 
 # 2) Skill
 mkdir -p "$HOME/.claude/skills"
+if [ -d "$SKILL_DST" ] && [ ! -L "$SKILL_DST" ] && grep -q '^name: peerlink' "$SKILL_DST/SKILL.md" 2>/dev/null; then
+  # npx skills add ile kopyalanmış eski sürüm: repo'daki canlı sürüme bağla
+  rm -rf "$SKILL_DST"
+fi
 if [ -L "$SKILL_DST" ] || [ ! -e "$SKILL_DST" ]; then
   ln -sfn "$HERE/skills/peerlink" "$SKILL_DST"
   echo "skill:  $SKILL_DST -> $HERE/skills/peerlink"
 else
-  echo "skill:  $SKILL_DST zaten var ve symlink değil; elle birleştir" >&2
+  echo "skill:  $SKILL_DST zaten var ve peerlink değil; elle birleştir" >&2
 fi
 
 # 3) Config
