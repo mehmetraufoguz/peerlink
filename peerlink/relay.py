@@ -521,6 +521,12 @@ def cmd_doctor(a, cfg):
             fail(f"eş {h}:{prt} zaman aşımı: IP yanlış, makine kapalı ya da güvenlik duvarı {prt} portunu kesiyor", "karşı makinede: peerlink doctor; macOS güvenlik duvarında python3'e gelen bağlantı izni")
         except ConnectionRefusedError:
             fail(f"eş {h}:{prt} bağlantı reddedildi: makine açık ama relay çalışmıyor", "karşı makinede: peerlink up")
+        except OSError as e:
+            if e.errno in (65, 51, 113, 101):  # EHOSTUNREACH / ENETUNREACH (macOS, Linux)
+                fail(f"eş {h}:{prt} ağda yok (no route to host): IP yanlış ya da makine bu ağda değil",
+                     "karşı makinede IP'yi doğrula: ipconfig getifaddr en0  (macOS) / hostname -I (Linux); sonra config'teki peers'ı düzelt")
+            else:
+                fail(f"eş {h}:{prt} {e.__class__.__name__}: {e}")
         except Exception as e:
             fail(f"eş {h}:{prt} {e.__class__.__name__}: {e}")
 
