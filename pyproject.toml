@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-relay-peer"
+version = "0.1.0"
+description = "Claude Code oturumlarını LAN üzerinden birbirine bağlayan relay (uzak oturumlar yerel peer gibi görünür)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Mehmet Rauf Oğuz" }]
+keywords = ["claude-code", "agents", "relay", "lan", "cross-session"]
+dependencies = []
+
+[project.scripts]
+agent-relay = "agent_relay_peer.relay:main"
+
+[tool.setuptools]
+packages = ["agent_relay_peer"]

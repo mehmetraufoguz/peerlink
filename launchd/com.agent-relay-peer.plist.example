@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Relay'i oturum açılışında başlatmak için:
+     cp launchd/com.agent-relay-peer.plist.example ~/Library/LaunchAgents/com.agent-relay-peer.plist
+     (agent-relay yolunu `which agent-relay` ile düzelt)
+     launchctl load ~/Library/LaunchAgents/com.agent-relay-peer.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.agent-relay-peer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGE_ME/.local/bin/agent-relay</string>
+    <string>relay</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/agent-relay-peer.log</string>
+  <key>StandardErrorPath</key><string>/tmp/agent-relay-peer.log</string>
+</dict>
+</plist>
