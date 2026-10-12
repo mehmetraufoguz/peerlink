@@ -1,28 +1,78 @@
 #!/usr/bin/env bash
-# peerlink CLI'yi kur (pipx veya pip --user) ve skill'i ~/.claude/skills altına bağla.
+# peerlink kurulumu: CLI (~/.local/bin/peerlink), Claude Code skill symlink'i ve config.
+#
+#   ./install.sh                                   # yalnızca CLI + skill (config varsa dokunmaz)
+#   ./install.sh --secret S --peer 192.168.1.20 --label macA   # config'i de yazar
+#
+# Bağımlılık yok: pipx varsa onunla, yoksa bu klasöre işaret eden bir sarmalayıcı betikle kurar.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-
-if command -v pipx >/dev/null 2>&1; then
-  pipx install --force "$HERE" >/dev/null && echo "peerlink: pipx ile kuruldu"
-else
-  python3 -m pip install --user --quiet "$HERE" && echo "peerlink: pip --user ile kuruldu (~/.local/bin PATH'te olmalı)"
-fi
-
+BIN="$HOME/.local/bin"
+CFG_DIR="$HOME/.config/peerlink"
+CFG="$CFG_DIR/config.json"
 SKILL_DST="$HOME/.claude/skills/peerlink"
+
+SECRET="" LABEL="" PEERS=() PORT=7437
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --secret) SECRET="$2"; shift 2 ;;
+    --peer)   PEERS+=("$2"); shift 2 ;;
+    --label)  LABEL="$2"; shift 2 ;;
+    --port)   PORT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    *) echo "bilinmeyen argüman: $1" >&2; exit 2 ;;
+  esac
+done
+
+# 1) CLI
+mkdir -p "$BIN"
+if command -v pipx >/dev/null 2>&1; then
+  pipx install --force "$HERE" >/dev/null 2>&1 && echo "cli:    pipx ile kuruldu ($(command -v peerlink || echo "$BIN/peerlink"))"
+else
+  cat > "$BIN/peerlink" <<EOF
+#!/usr/bin/env bash
+exec python3 "$HERE/peerlink/relay.py" "\$@"
+EOF
+  chmod +x "$BIN/peerlink"
+  echo "cli:    $BIN/peerlink -> $HERE (sarmalayıcı)"
+fi
+case ":$PATH:" in *":$BIN:"*) ;; *) echo "uyarı:  $BIN PATH'te değil; kabuk rc dosyana ekle: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
+
+# 2) Skill
 mkdir -p "$HOME/.claude/skills"
 if [ -L "$SKILL_DST" ] || [ ! -e "$SKILL_DST" ]; then
   ln -sfn "$HERE/skills/peerlink" "$SKILL_DST"
-  echo "skill: $SKILL_DST -> $HERE/skills/peerlink"
+  echo "skill:  $SKILL_DST -> $HERE/skills/peerlink"
 else
-  echo "skill: $SKILL_DST zaten var ve symlink değil; elle birleştir" >&2
+  echo "skill:  $SKILL_DST zaten var ve symlink değil; elle birleştir" >&2
 fi
 
-CFG="$HOME/.config/peerlink/config.json"
-if [ ! -f "$CFG" ]; then
-  mkdir -p "$(dirname "$CFG")"
-  cp "$HERE/config.example.json" "$CFG"
+# 3) Config
+mkdir -p "$CFG_DIR"
+if [ -n "$SECRET" ] || [ ${#PEERS[@]} -gt 0 ] || [ -n "$LABEL" ]; then
+  [ -n "$SECRET" ] || { echo "config: --peer/--label verildi ama --secret yok" >&2; exit 2; }
+  [ -n "$LABEL" ] || LABEL="$(hostname -s)"
+  PEERS_JSON="$(printf '"%s",' "${PEERS[@]-}" | sed 's/,$//; s/^""$//')"
+  cat > "$CFG" <<EOF
+{
+  "secret": "$SECRET",
+  "peers": [$PEERS_JSON],
+  "label": "$LABEL",
+  "port": $PORT,
+  "bind": "0.0.0.0",
+  "advertise": null,
+  "interval": 5
+}
+EOF
   chmod 600 "$CFG"
-  echo "config: $CFG oluşturuldu; secret ve peers alanlarını doldur"
+  echo "config: $CFG yazıldı (label=$LABEL, peers=${PEERS[*]-})"
+elif [ ! -f "$CFG" ]; then
+  cp "$HERE/config.example.json" "$CFG"; chmod 600 "$CFG"
+  echo "config: $CFG taslak olarak oluşturuldu; secret ve peers alanlarını doldur"
+else
+  echo "config: $CFG mevcut, dokunulmadı"
 fi
-echo "bitti. deneme: peerlink who"
+
+echo
+echo "bitti. sonraki adım:  peerlink up        (arka plan: nohup peerlink up > ~/.peerlink.log 2>&1 &)"
+echo "kontrol:              peerlink who"
