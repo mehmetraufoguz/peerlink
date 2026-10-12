@@ -112,8 +112,24 @@ peerlink send macB/"Super Frontend" "merhaba"    # proxy'siz tek seferlik gönde
 peerlink doctor                                  # python, config, relay, eşler (401 / zaman aşımı / reddedildi), ölü proxy'ler
 peerlink autostart on|off|status                 # oturum açılışında otomatik başlat (macOS launchd)
 peerlink update                                  # repoyu güncelle, kurulumu yenile, relay'i yeniden başlat
+peerlink peer add Ayse-MacBook.local             # eş ekle / rm / ls  (relay çalışıyorsa kendiliğinden yeniden başlar)
+peerlink label rauf                              # etiketi göster/değiştir
+peerlink secret --generate | peerlink secret     # anahtar üret ya da gizli sorarak kaydet (ps/geçmişe düşmez)
+peerlink config                                  # config'i göster (anahtar maskeli)
 peerlink clean                                   # ölü proxy kayıtlarını temizle
 ```
+
+### Yeni kişi eklemek
+
+Kurulumu tekrar koşmak gerekmez. Yeni makine kurulumu her zamanki tek satırla yapılır (aynı anahtar, mevcut
+makinelerin Bonjour adları `--peer` ile); mevcut makinelerde ise sadece:
+
+```bash
+peerlink peer add Ayse-MacBook.local
+```
+
+Relay kendiliğinden yeniden başlar, birkaç saniye içinde `ayse/...` oturumları görünür. Çıkarmak için `peer rm`.
+Etiketler makine başına benzersiz olmalı; gizli anahtar grup başına tektir (herkes herkese güvenir).
 
 ### `peers` nasıl çalışır
 

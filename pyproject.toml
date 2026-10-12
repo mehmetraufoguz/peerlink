@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "peerlink"
-version = "0.4.0"
+version = "0.5.0"
 description = "Claude Code oturumlarını LAN üzerinden birbirine bağlayan relay (uzak oturumlar yerel peer gibi görünür)"
 readme = "README.md"
 requires-python = ">=3.9"

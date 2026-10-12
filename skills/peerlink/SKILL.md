@@ -6,7 +6,7 @@ compatibility: Claude Code on macOS/Linux; python3 3.9+, git, curl; peers on the
 metadata:
   author: mehmetraufoguz
   repo: https://github.com/mehmetraufoguz/peerlink
-  version: "0.4"
+  version: "0.5"
 ---
 
 # peerlink: LAN üzerinden oturumlar arası mesajlaşma
@@ -68,8 +68,10 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 | `doctor`: relay DOWN | relay başlatılmamış | `peerlink up -d`; kalıcı için `peerlink autostart on` |
 | `doctor`: autostart kapalı | relay yeniden başlatmada ölür | `peerlink autostart on` (macOS; `~/Documents` altındaki repo için `~/.peerlink` çalışma kopyası oluşturur) |
 | yeni sürüm çıktı / "güncelle" | eski kod çalışıyor | `peerlink update` (git pull + kurulum + relay restart); her iki makinede |
-| eşin IP'si değişti | DHCP yeni adres verdi | `peers` listesinde IP yerine Bonjour adı kullan: `--peer <Ad>.local`; adı karşı makinede `hostname` verir |
-| config değişti (yeni eş, yeni anahtar, etiket) | çalışan relay eski config'i kullanıyor | `ensure.sh --secret ... --peer ... --label ...` yeniden yazar ve relay'i yeniden başlatır; yalnızca yeniden başlatmak için `peerlink restart` |
+| eşin IP'si değişti | DHCP yeni adres verdi | `peerlink peer rm <eski-ip>` + `peerlink peer add <Ad>.local` (Bonjour adı; karşı makinede `hostname` verir) |
+| yeni kişi/makine eklenecek | eş listesi eksik | her mevcut makinede `peerlink peer add <Ad>.local`; yeni makinede bootstrap tek satırı (aynı anahtar). Kurulumu tekrar koşmak gerekmez |
+| etiket ya da anahtar değişecek | config elle düzenlenmemeli | `peerlink label <ad>`; `peerlink secret` (gizli sorar, kullanıcı çalıştırsın); `peerlink config` ile kontrol |
+| config değişti | çalışan relay eski config'i kullanıyor | `peer add/rm`, `label`, `secret` komutları relay'i kendiliğinden yeniden başlatır; elle düzenlendiyse `peerlink restart` |
 | `peerlink up`: "relay zaten çalışıyor" | ikinci kez başlatılmaya çalışıldı | hata değil; config değiştiyse `peerlink restart`, durdurmak için `peerlink down` |
 | eş `401` | iki makinede farklı secret | config'leri karşılaştır, anahtarı tekrar yaz |
 | eş zaman aşımı | IP yanlış, makine kapalı, güvenlik duvarı 7437'yi kesiyor | karşı makinede `peerlink doctor`; macOS güvenlik duvarında python3'e gelen bağlantı izni; `ping` ile IP doğrula |
@@ -97,6 +99,7 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 - Proxy = `~/.claude/sessions/<pid>.json` (içinde `peerlinkProxy`) + `/tmp/cc-socks/<pid>.sock` + `.key`.
 - Relay HTTP: `GET /health` (anahtarsız), `GET /sessions`, `POST /deliver`; başlık `X-Peerlink-Secret`; port 7437.
 - Config: `~/.config/peerlink/config.json` → `secret`, `peers` (liste, `HOST[:PORT]`), `label`, `port`, `bind`, `advertise`, `interval`.
+  Elle düzenleme yerine: `peerlink peer add|rm|ls`, `peerlink label [ad]`, `peerlink secret [--generate]`, `peerlink config`.
 - Yaşam döngüsü: `peerlink up -d` (arka plan, log `~/.peerlink.log`, pid `~/.config/peerlink/relay.pid`), `peerlink down`, `peerlink restart`,
   `peerlink autostart on|off|status` (macOS launchd, `~/Library/LaunchAgents/com.peerlink.plist`), `peerlink update`.
   `ensure.sh`/`install.sh` her çalıştırmada idempotenttir: CLI, skill ve PATH'i onarır, config tamamsa relay'i yeniden başlatır, doktoru çalıştırır.

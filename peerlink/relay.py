@@ -15,6 +15,8 @@ Komutlar:
   peerlink down    relay'i durdur;  peerlink restart  config değişince
   peerlink autostart on|off|status   oturum açılışında otomatik başlat (macOS launchd)
   peerlink update  git pull + kurulumu yenile + relay'i yeniden başlat
+  peerlink peer add|rm|ls  eş makineler;  peerlink label [ad];  peerlink secret [--generate];  peerlink config
+                   (config değişince relay çalışıyorsa kendiliğinden yeniden başlar)
   peerlink who     kim var: relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar  [--host HOST]
   peerlink send    macB/"Oturum adı" "metin"   proxy'siz tek seferlik gönderim (cevap dönmez)
   peerlink doctor  ortamı denetle (python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler)
@@ -32,7 +34,7 @@ güvendiğin LAN'da kullan; istersen önüne bir TLS reverse proxy koy.
 import argparse, glob, hashlib, http.client, json, os, re, secrets, signal, socket, subprocess, sys, threading, time, urllib.parse, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 SESS_DIR = os.path.expanduser("~/.claude/sessions")
 SOCK_DIR = "/tmp/cc-socks"
@@ -552,6 +554,82 @@ def cmd_doctor(a, cfg):
     sys.exit(1 if fails else 0)
 
 
+# ---------------------------------------------------------------- config komutları
+def save_config(cfg, path=None):
+    path = path or CONFIG_PATH
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False); f.write("\n")
+    os.chmod(path, 0o600)
+
+
+def restart_if_running(a, cfg, why):
+    port = int(resolve(a, cfg, "port", DEFAULT_PORT))
+    if relay_health(port) or launchd_loaded():
+        print(f"relay yeniden başlatılıyor ({why})...")
+        cmd_restart(a, cfg)
+    else:
+        print("relay çalışmıyor; başlatmak için: peerlink up -d")
+
+
+def cmd_peer(a, cfg):
+    peers = list(cfg.get("peers", []))
+    if a.action == "ls":
+        if not peers: print("eş yok. ekle: peerlink peer add <host>[:port]"); return
+        port = resolve(a, cfg, "port", DEFAULT_PORT); secret = resolve(a, cfg, "secret", env="PEERLINK_SECRET") or ""
+        for pth in peers:
+            h, prt = split_host(pth, port)
+            try:
+                r = http_json(h, prt, secret, "GET", "/sessions", timeout=3)
+                print(f"  {pth:<32} UP    label={r['label']}  oturum={len(r['sessions'])}")
+            except RuntimeError as e:
+                print(f"  {pth:<32} 401   gizli anahtar uyuşmuyor" if "401" in str(e) else f"  {pth:<32} HATA  {e}")
+            except Exception as e:
+                print(f"  {pth:<32} DOWN  {e.__class__.__name__}")
+        return
+    if not a.hosts: sys.exit("en az bir host ver: peerlink peer add <host>[:port]")
+    if a.action == "add":
+        new = [h for h in a.hosts if h not in peers]
+        if not new: print("zaten listede:", ", ".join(a.hosts)); return
+        cfg["peers"] = peers + new; save_config(cfg, a.config)
+        print("eklendi:", ", ".join(new), "| peers =", cfg["peers"])
+    elif a.action == "rm":
+        gone = [h for h in a.hosts if h in peers]
+        if not gone: sys.exit(f"listede yok: {', '.join(a.hosts)} | peers = {peers}")
+        cfg["peers"] = [h for h in peers if h not in gone]; save_config(cfg, a.config)
+        print("silindi:", ", ".join(gone), "| peers =", cfg["peers"])
+    restart_if_running(a, cfg, "eş listesi değişti")
+
+
+def cmd_label(a, cfg):
+    if not a.name:
+        print(f"label: {cfg.get('label') or HOSTNAME + ' (varsayılan: hostname)'}"); return
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}", a.name):
+        sys.exit("etiket: harf/rakamla başlasın, en çok 32 karakter, yalnızca harf rakam . _ -")
+    cfg["label"] = a.name; save_config(cfg, a.config)
+    print(f"label = {a.name}  (uzak makinelerde oturumların '{a.name}/<ad>' olarak görünür)")
+    restart_if_running(a, cfg, "etiket değişti")
+
+
+def cmd_secret(a, cfg):
+    import getpass
+    if a.generate:
+        val = secrets.token_hex(24); print(val); print("(bu anahtarı diğer makinelerde de aynen kullan)", file=sys.stderr)
+    elif not sys.stdin.isatty():
+        val = sys.stdin.readline().strip()
+    else:
+        val = getpass.getpass("gizli anahtar (yazarken görünmez): ")
+    if len(val) < 16: sys.exit("anahtar en az 16 karakter olsun (öneri: peerlink secret --generate)")
+    cfg["secret"] = val; save_config(cfg, a.config)
+    print(f"secret kaydedildi ({len(val)} karakter) -> {a.config or CONFIG_PATH}")
+    restart_if_running(a, cfg, "anahtar değişti")
+
+
+def cmd_config(a, cfg):
+    shown = dict(cfg)
+    if shown.get("secret"): shown["secret"] = shown["secret"][:4] + "…" + f"({len(shown['secret'])})"
+    print(f"{a.config or CONFIG_PATH}"); print(json.dumps(shown, indent=2, ensure_ascii=False))
+
+
 def cmd_clean(a, cfg):
     n = 0
     for p in glob.glob(f"{SESS_DIR}/*.json"):
@@ -823,6 +901,12 @@ def main(argv=None):
     send.add_argument("--host", help="etiket yerine doğrudan uzak relay adresi"); send.add_argument("--label")
     send.add_argument("to", help="'etiket/oturum adı' (veya --host ile yalnızca ad)"); send.add_argument("text")
 
+    pe = sub.add_parser("peer", help="eş makineleri yönet: add <host>... | rm <host>... | ls"); common(pe)
+    pe.add_argument("action", choices=["add", "rm", "ls"]); pe.add_argument("hosts", nargs="*", help="HOST[:PORT] ya da Bonjour adı (Ad.local)")
+    lb = sub.add_parser("label", help="bu makinenin etiketini göster/değiştir"); common(lb); lb.add_argument("name", nargs="?")
+    se = sub.add_parser("secret", help="gizli anahtarı gizli sorarak kaydet (ya da --generate ile üret)"); common(se)
+    se.add_argument("--generate", action="store_true")
+    sub.add_parser("config", help="config'i göster (anahtar maskeli)")
     sub.add_parser("clean", help="ölü proxy kayıtlarını sil")
     au = common(sub.add_parser("autostart", help="oturum açılışında otomatik başlat (macOS launchd): on | off | status"))
     au.add_argument("action", choices=["on", "off", "status"])
@@ -838,7 +922,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     {"up": cmd_up, "down": cmd_down, "restart": cmd_restart, "who": cmd_who, "send": cmd_send, "clean": cmd_clean,
-     "doctor": cmd_doctor, "autostart": cmd_autostart, "update": cmd_update, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
+     "doctor": cmd_doctor, "autostart": cmd_autostart, "update": cmd_update, "peer": cmd_peer, "label": cmd_label,
+     "secret": cmd_secret, "config": cmd_config, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":
