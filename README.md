@@ -82,8 +82,16 @@ peerlink up                                      # relay'i başlat (ön planda);
 peerlink who                                     # relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar
 peerlink who --host 192.168.1.20                 # yalnızca o makinenin oturumları
 peerlink send macB/"Super Frontend" "merhaba"    # proxy'siz tek seferlik gönderim (cevap dönmez)
+peerlink doctor                                  # python, config, relay, eşler (401 / zaman aşımı / reddedildi), ölü proxy'ler
 peerlink clean                                   # ölü proxy kayıtlarını temizle
 ```
+
+### `peers` nasıl çalışır
+
+`--peer HOST[:PORT]` tekrarlanabilir; config'te `peers` bir listedir. Her giriş **tek bir makinedir**, aralık ya
+da CIDR yoktur ve otomatik keşif yapılmaz. Relay her 5 saniyede listedeki her eşe `/sessions` sorar ve oradaki
+oturumları aynalar. Üç makine için her makinede diğer ikisi listelenir. Port verilmezse 7437. Eşin kendi etiketi
+(`label`) proxy adlarının önekidir ve makine başına benzersiz olmalıdır; `peerlink doctor` çakışmayı yakalar.
 
 Relay çalıştıktan birkaç saniye sonra bir Claude Code oturumunda `ListAgents` çağır; `macB/...` satırları
 belirir. `SendMessage` ile adı aynen kullanarak yaz.
@@ -96,10 +104,19 @@ peerlink up --secret test --peer 127.0.0.1:7437 --bind 127.0.0.1 --label remote
 
 ## Claude Code skill'i
 
-[skills/peerlink/SKILL.md](skills/peerlink/SKILL.md), bir Claude Code oturumuna uzak
-oturumları nasıl bulacağını, mesaj atacağını ve relay'i nasıl teşhis edeceğini öğretir. `install.sh`
-bunu `~/.claude/skills/peerlink` altına symlink'ler; proje bazlı istiyorsan `.claude/skills/`
-altına kopyala.
+[skills/peerlink/SKILL.md](skills/peerlink/SKILL.md), bir Claude Code oturumuna uzak oturumları nasıl
+bulacağını, mesaj atacağını ve relay'i nasıl kuracağını/teşhis edeceğini öğretir. Skill kendi kendine yeter:
+`scripts/ensure.sh` peerlink'in kurulu olup olmadığını denetler, değilse `bootstrap.sh` ile kurar, sonra
+`peerlink doctor` çalıştırır. Yani skill'i tek başına kuran bir oturum da işi sıfırdan tamamlayabilir.
+
+```bash
+npx skills add mehmetraufoguz/peerlink -g          # yalnızca skill (kod yok; ilk kullanımda ensure.sh kurar)
+./install.sh                                        # repo'dan: ~/.claude/skills/peerlink -> bu klasöre symlink
+```
+
+[skills.sh](https://skills.sh) dizini ayrı bir yayınlama adımı istemez; `npx skills add <owner/repo>`
+çalıştırıldıkça anonim telemetriyle otomatik listelenir. Skill, [Agent Skills](https://agentskills.io)
+spesifikasyonuna uyar (`skills/<ad>/SKILL.md`, `name` klasör adıyla aynı).
 
 ## Güvenlik
 
