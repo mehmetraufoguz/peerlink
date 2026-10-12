@@ -39,14 +39,23 @@ fi
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *)
-    # ~/.local/bin PATH'te değil: kabuk rc dosyasına bir kez ekle (zsh ve bash)
-    LINE='export PATH="$HOME/.local/bin:$PATH"  # peerlink'
-    ADDED=""
-    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
-      if ! grep -qs '\.local/bin' "$rc"; then printf '\n%s\n' "$LINE" >> "$rc"; ADDED="$ADDED $rc"; fi
+    # ~/.local/bin PATH'te değil. 1) Zaten PATH'te olan yazılabilir bir dizine bağla (Homebrew vb.)
+    LINKED=""
+    for d in /opt/homebrew/bin /usr/local/bin "$HOME/bin"; do
+      case ":$PATH:" in *":$d:"*) [ -d "$d" ] && [ -w "$d" ] && { ln -sfn "$BIN/peerlink" "$d/peerlink"; LINKED="$d"; break; } ;; esac
     done
-    [ -n "$ADDED" ] && echo "path:   $BIN PATH'e eklendi ($ADDED); bu terminalde etkinleştir:  source ~/.zshrc" \
-                    || echo "path:   $BIN PATH'te değil; yeni bir terminal aç ya da:  source ~/.zshrc"
+    if [ -n "$LINKED" ]; then
+      echo "path:   $LINKED/peerlink -> $BIN/peerlink (PATH'te hazır)"
+    else
+      # 2) Kabuk rc dosyalarına bir kez ekle (zsh, bash login ve non-login, POSIX)
+      LINE='export PATH="$HOME/.local/bin:$PATH"  # peerlink'
+      ADDED=""
+      for rc in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+        if ! grep -qs '\.local/bin' "$rc"; then printf '\n%s\n' "$LINE" >> "$rc"; ADDED="$ADDED $(basename "$rc")"; fi
+      done
+      [ -n "$ADDED" ] && echo "path:   $BIN rc dosyalarına eklendi ($ADDED). Bu terminalde:  source ~/.zshrc   (yeni terminallerde otomatik)" \
+                      || echo "path:   $BIN PATH'te değil; bu terminalde:  source ~/.zshrc   ya da yeni terminal aç"
+    fi
     export PATH="$BIN:$PATH"
     ;;
 esac
