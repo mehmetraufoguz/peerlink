@@ -33,6 +33,10 @@ uzak oturumların `ListAgents` çıktısında nasıl görüneceğini belirler (`
 openssl rand -hex 24
 ```
 
+Anahtar makineye değil, eşleşmeye aittir: **tek anahtar üretilir ve her makinede aynısı kullanılır.**
+Her makine kendi anahtarını üretirse relay'ler birbirine 401 döner (`peerlink doctor` bunu
+"gizli anahtar uyuşmuyor" diye gösterir).
+
 ```bash
 # Makine A (192.168.1.10)
 curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
