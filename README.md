@@ -40,15 +40,17 @@ Her makine kendi anahtarını üretirse relay'ler birbirine 401 döner (`peerlin
 ```bash
 # Makine A (192.168.1.10)
 curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
-  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.20 --label macA
+  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.20 --label macA --autostart
 ```
 
 ```bash
 # Makine B (192.168.1.20)
 curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
-  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.10 --label macB
+  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.10 --label macB --autostart
 ```
 
+`--autostart` relay'i oturum açılışında otomatik başlayacak şekilde kaydeder (macOS); istemiyorsan bayrağı atla,
+relay yine arka planda başlar ama yeniden başlatmada `peerlink up -d` gerekir.
 Kurulum bittiğinde relay arka planda çalışır ve `peerlink doctor` çıktısı görünür; her iki makinede de
 "HAZIR" diyorsa iş tamam. Komut tekrar çalıştırılabilir: var olan kurulumu günceller, PATH'i onarır, config'i
 yeniden yazar ve relay'i yeniden başlatır.
@@ -59,9 +61,26 @@ yeniden yazar ve relay'i yeniden başlatır.
 sarmalayıcı yazar. Python 3.9+ ve git yeter.
 
 `peerlink up -d` relay'i arka planda başlatır (log `~/.peerlink.log`); `peerlink down` durdurur,
-`peerlink restart` config değişince yeniden başlatır. Oturum açılışında otomatik başlatmak için
-[launchd/com.peerlink.plist.example](launchd/com.peerlink.plist.example). Birkaç saniye sonra `peerlink who`
-eşi `UP` göstermeli.
+`peerlink restart` config değişince yeniden başlatır. Birkaç saniye sonra `peerlink who` eşi `UP` göstermeli.
+
+### Otomatik başlatma (macOS)
+
+```bash
+peerlink autostart on        # ya da kurulum satırına --autostart ekle
+```
+
+Relay bir launchd kullanıcı servisi olur (`~/Library/LaunchAgents/com.peerlink.plist`): oturum açılışında
+başlar, çökerse yeniden başlatılır, `sudo` gerekmez. `up`/`down`/`restart` servisi tanır: `down` servisi
+çıkarır (autostart açık kalır), `restart` servisi yeniden başlatır, `autostart off` servisi kaldırır,
+`autostart status` durumu gösterir. Repo `~/Documents`, `~/Desktop` ya da `~/Downloads` altındaysa launchd
+oradan okuyamaz (macOS gizlilik koruması); `autostart on` bu durumda `~/.peerlink` altına bir çalışma kopyası
+klonlar ve servisi oradan çalıştırır. Linux'ta henüz desteklenmiyor (`systemd --user` planlı).
+
+### Güncelleme
+
+```bash
+peerlink update              # git pull + kurulumu yenile + relay'i yeniden başlat
+```
 
 ### Karşı makinedeki Claude oturumunun yapması gereken bir şey yok
 
@@ -91,13 +110,17 @@ peerlink who                                     # relay durumu, yerel oturumlar
 peerlink who --host 192.168.1.20                 # yalnızca o makinenin oturumları
 peerlink send macB/"Super Frontend" "merhaba"    # proxy'siz tek seferlik gönderim (cevap dönmez)
 peerlink doctor                                  # python, config, relay, eşler (401 / zaman aşımı / reddedildi), ölü proxy'ler
+peerlink autostart on|off|status                 # oturum açılışında otomatik başlat (macOS launchd)
+peerlink update                                  # repoyu güncelle, kurulumu yenile, relay'i yeniden başlat
 peerlink clean                                   # ölü proxy kayıtlarını temizle
 ```
 
 ### `peers` nasıl çalışır
 
 `--peer HOST[:PORT]` tekrarlanabilir; config'te `peers` bir listedir. Her giriş **tek bir makinedir**, aralık ya
-da CIDR yoktur ve otomatik keşif yapılmaz. Relay her 5 saniyede listedeki her eşe `/sessions` sorar ve oradaki
+da CIDR yoktur ve otomatik keşif yapılmaz. `HOST` bir IP ya da ad olabilir; Mac'ler arasında IP yerine Bonjour adı
+kullanmak IP değişimlerine dayanıklıdır: `--peer Kazim-MacBook-Pro.local` (adı karşı makinede `hostname` ile
+öğren; `.local` adları macOS'ta ek kurulum gerektirmeden çözülür, Linux'ta Avahi gerekir). Relay her 5 saniyede listedeki her eşe `/sessions` sorar ve oradaki
 oturumları aynalar. Üç makine için her makinede diğer ikisi listelenir. Port verilmezse 7437. Eşin kendi etiketi
 (`label`) proxy adlarının önekidir ve makine başına benzersiz olmalıdır; `peerlink doctor` çakışmayı yakalar.
 

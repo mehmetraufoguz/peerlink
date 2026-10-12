@@ -15,3 +15,6 @@ Bağımlılık yok, Python 3.9+. Çalıştır: `python3 -m peerlink <komut>` vey
 - Gizli anahtar hiçbir zaman loga veya çıktıya yazılmaz.
 - Commit mesajları Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`; kırıcı değişiklikte
   `!` ve `BREAKING CHANGE:` gövdesi. Özet satırı İngilizce, emirsiz, 72 karakter altı.
+- `peerlink autostart on`: launchd servisi. Repo `~/Documents` altındaysa (geliştirme makinesi) servis `~/.peerlink`
+  çalışma kopyasından çalışır; o kopya bu repodan klonlanır ve `autostart on`/`update` ile `git pull` edilir. Yani
+  bu repoda commit'lenmemiş değişiklik servise yansımaz.

@@ -13,6 +13,8 @@ Cevaplar aynı yolu ters yönde izler (from alanı her iki tarafta proxy yoluna 
 Komutlar:
   peerlink up [-d] relay'i başlat (-d: arka planda, log ~/.peerlink.log)
   peerlink down    relay'i durdur;  peerlink restart  config değişince
+  peerlink autostart on|off|status   oturum açılışında otomatik başlat (macOS launchd)
+  peerlink update  git pull + kurulumu yenile + relay'i yeniden başlat
   peerlink who     kim var: relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar  [--host HOST]
   peerlink send    macB/"Oturum adı" "metin"   proxy'siz tek seferlik gönderim (cevap dönmez)
   peerlink doctor  ortamı denetle (python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler)
@@ -30,7 +32,7 @@ güvendiğin LAN'da kullan; istersen önüne bir TLS reverse proxy koy.
 import argparse, glob, hashlib, http.client, json, os, re, secrets, signal, socket, subprocess, sys, threading, time, urllib.parse, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 SESS_DIR = os.path.expanduser("~/.claude/sessions")
 SOCK_DIR = "/tmp/cc-socks"
@@ -39,6 +41,9 @@ SECRET_HEADER = "X-Peerlink-Secret"
 CONFIG_PATH = os.path.expanduser("~/.config/peerlink/config.json")
 PID_PATH = os.path.expanduser("~/.config/peerlink/relay.pid")
 LOG_PATH = os.path.expanduser("~/.peerlink.log")
+LAUNCHD_LABEL = "com.peerlink"
+PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PORT = 7437
 HOSTNAME = socket.gethostname().split(".")[0]
 CLAUDE_VERSION_TESTED = "2.1.296"
@@ -512,6 +517,11 @@ def cmd_doctor(a, cfg):
     except Exception as e:
         fail(f"relay DOWN (127.0.0.1:{port}: {e.__class__.__name__})", "peerlink up -d")
     ok(f"proxy oturum: {len(prox)}") if prox else (warn("hiç proxy yok: eşler erişilemiyor ya da orada oturum yok") if relay_up else None)
+    if sys.platform == "darwin":
+        if autostart_enabled():
+            (ok if launchd_loaded() else warn)("autostart açık (launchd)" + ("" if launchd_loaded() else ", ama servis yüklü değil"), None if launchd_loaded() else "peerlink up -d")
+        else:
+            warn("autostart kapalı: makine yeniden başlayınca relay başlamaz", "peerlink autostart on")
 
     for pth in peers:
         h, prt = split_host(pth, port)
@@ -564,6 +574,155 @@ def read_pid():
     except Exception: return None
 
 
+# ---------------------------------------------------------------- launchd (macOS autostart)
+def launchd_domain():
+    return f"gui/{os.getuid()}"
+
+
+def launchd_loaded():
+    if sys.platform != "darwin": return False
+    return subprocess.run(["launchctl", "print", f"{launchd_domain()}/{LAUNCHD_LABEL}"],
+                          capture_output=True).returncode == 0
+
+
+def autostart_enabled():
+    return sys.platform == "darwin" and os.path.exists(PLIST_PATH)
+
+
+def launchd_write_plist():
+    relay = runtime_relay_path()
+    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{sys.executable}</string>
+    <string>{relay}</string>
+    <string>up</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>WorkingDirectory</key><string>{os.path.expanduser("~")}</string>
+  <key>StandardOutPath</key><string>{LOG_PATH}</string>
+  <key>StandardErrorPath</key><string>{LOG_PATH}</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+</dict>
+</plist>
+"""
+    os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
+    with open(PLIST_PATH, "w") as f: f.write(plist)
+
+
+def launchd_start(port):
+    """plist'i yükle (yüklüyse kickstart); relay sağlıklı olmazsa servisi geri çıkar (KeepAlive döngüsü olmasın)."""
+    if not launchd_loaded():
+        r = subprocess.run(["launchctl", "bootstrap", launchd_domain(), PLIST_PATH], capture_output=True, text=True)
+        if r.returncode != 0: sys.exit(f"launchctl bootstrap başarısız: {r.stderr.strip()}")
+    else:
+        subprocess.run(["launchctl", "kickstart", "-k", f"{launchd_domain()}/{LAUNCHD_LABEL}"], capture_output=True)
+    if not wait_health(port):
+        launchd_stop()
+        tail = subprocess.run(["tail", "-5", LOG_PATH], capture_output=True, text=True).stdout
+        sys.exit(f"relay launchd altında başlamadı; servis geri çıkarıldı. log ({LOG_PATH}):\n{tail}")
+
+
+def launchd_stop():
+    if launchd_loaded():
+        subprocess.run(["launchctl", "bootout", f"{launchd_domain()}/{LAUNCHD_LABEL}"], capture_output=True)
+
+
+def stop_foreground_relay(port):
+    """up / up -d ile başlatılmış relay'i durdur (pidfile, yoksa pgrep). launchd'yi ellemez."""
+    pid = read_pid()
+    if pid and pid_alive(pid):
+        os.kill(pid, signal.SIGTERM)
+    else:
+        me = os.path.abspath(__file__)
+        out = subprocess.run(["pgrep", "-f", f"relay.py up"], capture_output=True, text=True).stdout.split()
+        for x in out:
+            if int(x) != os.getpid(): os.kill(int(x), signal.SIGTERM)
+        pid = out[0] if out else None
+    stopped = wait_health(port, want=False)
+    try: os.unlink(PID_PATH)
+    except FileNotFoundError: pass
+    return pid, stopped
+
+
+TCC_DIRS = ("Documents", "Desktop", "Downloads")
+RUNTIME_DIR = os.path.expanduser("~/.peerlink")
+
+
+def runtime_relay_path():
+    """launchd için relay.py yolu. Repo macOS gizlilik korumalı bir klasördeyse (Documents/Desktop/Downloads)
+    launchd oradan okuyamaz; ~/.peerlink altında bir çalışma kopyası oluşturup onu kullan."""
+    rel = os.path.relpath(REPO_DIR, os.path.expanduser("~"))
+    if sys.platform != "darwin" or rel.split(os.sep)[0] not in TCC_DIRS:
+        return os.path.abspath(__file__)
+    if not os.path.isdir(os.path.join(RUNTIME_DIR, ".git")):
+        log(f"repo gizlilik korumalı klasörde ({rel}); launchd için {RUNTIME_DIR} klonlanıyor")
+        r = subprocess.run(["git", "clone", "-q", REPO_DIR, RUNTIME_DIR], capture_output=True, text=True)
+        if r.returncode != 0: sys.exit(f"klon başarısız: {r.stderr.strip()}")
+    else:
+        subprocess.run(["git", "-C", RUNTIME_DIR, "pull", "-q", "--ff-only"], capture_output=True)
+    return os.path.join(RUNTIME_DIR, "peerlink", "relay.py")
+
+
+def wait_health(port, want=True, tries=40):
+    for _ in range(tries):
+        if bool(relay_health(port, 0.5)) == want: return True
+        time.sleep(0.25)
+    return False
+
+
+def cmd_autostart(a, cfg):
+    port = int(resolve(a, cfg, "port", DEFAULT_PORT))
+    if a.action == "status":
+        if sys.platform != "darwin": print("autostart: yalnızca macOS (launchd) destekleniyor"); return
+        print(f"autostart: {'açık' if autostart_enabled() else 'kapalı'}  ({PLIST_PATH})")
+        print(f"launchd:   {'yüklü' if launchd_loaded() else 'yüklü değil'}   relay: {'UP' if relay_health(port) else 'DOWN'}")
+        return
+    if sys.platform != "darwin": sys.exit("autostart yalnızca macOS'ta (launchd) destekleniyor; Linux için systemd --user henüz yok")
+    if a.action == "on":
+        need_secret(a, cfg)
+        # up -d ile başlatılmış relay varsa launchd devralsın
+        if relay_health(port) and not launchd_loaded():
+            _, stopped = stop_foreground_relay(port)
+            if not stopped: sys.exit(f"port {port} üzerindeki mevcut relay durdurulamadı; elle: pkill -f 'relay.py up'")
+        launchd_write_plist(); launchd_start(port)
+        where = runtime_relay_path()
+        note = f" (çalışma kopyası: {RUNTIME_DIR})" if where.startswith(RUNTIME_DIR) and not REPO_DIR.startswith(RUNTIME_DIR) else ""
+        print(f"autostart açık: {LAUNCHD_LABEL} oturum açılışında başlar, çökerse yeniden başlatılır. relay UP (port {port}){note}")
+    elif a.action == "off":
+        launchd_stop()
+        try: os.unlink(PLIST_PATH); removed = True
+        except FileNotFoundError: removed = False
+        wait_health(port, want=False)
+        print("autostart kapalı; relay durdu" + ("" if removed else " (plist zaten yoktu)") + ". Elle başlatmak için: peerlink up -d")
+
+
+def cmd_update(a, cfg):
+    port = int(resolve(a, cfg, "port", DEFAULT_PORT))
+    if not os.path.isdir(os.path.join(REPO_DIR, ".git")):
+        sys.exit(f"{REPO_DIR} bir git deposu değil (pipx ile mi kuruldu?). Güncelleme: pipx install --force git+https://github.com/mehmetraufoguz/peerlink")
+    before = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["git", "-C", REPO_DIR, "pull", "--ff-only", "-q"], capture_output=True, text=True)
+    if r.returncode != 0: sys.exit(f"git pull başarısız: {r.stderr.strip()}")
+    after = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    print(f"repo: {before} -> {after}" + ("  (zaten güncel)" if before == after else ""), flush=True)
+    installer = os.path.join(REPO_DIR, "install.sh")
+    if os.path.exists(installer):
+        # kurulum idempotent: CLI/skill/PATH onarılır; relay çalışıyorsa yeniden başlatılır
+        args = ["bash", installer] + ([] if (relay_health(port) or autostart_enabled()) else ["--no-start"])
+        if autostart_enabled(): args.append("--autostart")
+        subprocess.run(args)
+    else:
+        print("install.sh yok; yalnızca repo güncellendi")
+
+
 def cmd_up(a, cfg):
     a.secret = need_secret(a, cfg)
     a.peer = peer_list(a, cfg)
@@ -579,8 +738,12 @@ def cmd_up(a, cfg):
             a.advertise = "127.0.0.1"
     h = relay_health(a.port)
     if h:
-        print(f"relay zaten çalışıyor: label={h['label']} v{h['version']} port={a.port} (pid {read_pid() or '?'}); yeniden başlatmak için: peerlink restart")
+        via = "launchd" if launchd_loaded() else f"pid {read_pid() or '?'}"
+        print(f"relay zaten çalışıyor: label={h['label']} v{h['version']} port={a.port} ({via}); yeniden başlatmak için: peerlink restart")
         sys.exit(0)
+    if autostart_enabled() and getattr(a, "daemon", False):
+        launchd_start(a.port)
+        print(f"relay launchd altında başladı: label={a.label} port={a.port} log={LOG_PATH}"); return
     if getattr(a, "daemon", False):
         # Çocuk süreç için argümanları çözümlenmiş değerlerden kur (sys.argv'yi kopyalama: restart kendine dönerdi).
         # secret komut satırına yazılmaz (ps'te görünmesin); ortam değişkeniyle geçer.
@@ -610,28 +773,27 @@ def cmd_up(a, cfg):
 
 def cmd_down(a, cfg):
     port = int(resolve(a, cfg, "port", DEFAULT_PORT))
-    pid = read_pid()
-    if pid and pid_alive(pid):
-        os.kill(pid, signal.SIGTERM)
-    else:
-        # pidfile yok/eski: aynı dosyadan çalışan "up" süreçlerini bul
-        me = os.path.abspath(__file__)
-        out = subprocess.run(["pgrep", "-f", f"{me} up"], capture_output=True, text=True).stdout.split()
-        for x in out:
-            if int(x) != os.getpid(): os.kill(int(x), signal.SIGTERM)
-        pid = out[0] if out else None
-    for _ in range(25):
-        if not relay_health(port, 0.5): break
-        time.sleep(0.2)
-    else:
+    if launchd_loaded():
+        launchd_stop(); wait_health(port, want=False)
+        try: os.unlink(PID_PATH)
+        except FileNotFoundError: pass
+        cmd_clean(a, cfg)
+        print("relay durdu (launchd'den çıkarıldı; autostart hâlâ açık, bir sonraki oturum açılışında ya da 'peerlink up -d' ile başlar)")
+        return
+    pid, stopped = stop_foreground_relay(port)
+    if not stopped:
         print("relay hâlâ cevap veriyor; elle: pkill -f 'relay.py up'"); sys.exit(1)
-    try: os.unlink(PID_PATH)
-    except FileNotFoundError: pass
     cmd_clean(a, cfg)
     print("relay durdu" if pid else "relay zaten çalışmıyordu")
 
 
 def cmd_restart(a, cfg):
+    port = int(resolve(a, cfg, "port", DEFAULT_PORT))
+    if autostart_enabled():
+        if relay_health(port) and not launchd_loaded(): stop_foreground_relay(port)  # eski up -d süreci
+        launchd_start(port)
+        cmd_clean(a, cfg)
+        print(f"relay launchd altında yeniden başladı (port {port})"); return
     cmd_down(a, cfg)
     a.daemon = True
     cmd_up(a, cfg)
@@ -662,6 +824,9 @@ def main(argv=None):
     send.add_argument("to", help="'etiket/oturum adı' (veya --host ile yalnızca ad)"); send.add_argument("text")
 
     sub.add_parser("clean", help="ölü proxy kayıtlarını sil")
+    au = common(sub.add_parser("autostart", help="oturum açılışında otomatik başlat (macOS launchd): on | off | status"))
+    au.add_argument("action", choices=["on", "off", "status"])
+    common(sub.add_parser("update", help="repoyu güncelle (git pull) ve kurulumu yenile; relay çalışıyorsa yeniden başlat"))
     common(sub.add_parser("doctor", help="ortamı denetle: python, config, relay, eşler, güvenlik duvarı, ölü proxy'ler"))
 
     p = sub.add_parser("proxy")
@@ -673,7 +838,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     {"up": cmd_up, "down": cmd_down, "restart": cmd_restart, "who": cmd_who, "send": cmd_send, "clean": cmd_clean,
-     "doctor": cmd_doctor, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
+     "doctor": cmd_doctor, "autostart": cmd_autostart, "update": cmd_update, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":

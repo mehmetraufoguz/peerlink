@@ -4,6 +4,7 @@
 #   ./install.sh                                   # yalnızca CLI + skill (config varsa dokunmaz)
 #   ./install.sh --secret S --peer 192.168.1.20 --label macA   # config'i de yazar
 #   --no-start: relay'i (yeniden) başlatma
+#   --autostart: relay'i launchd'ye kaydet (oturum açılışında başlar, çökerse yeniden başlar)
 # Her çalıştırma idempotent: CLI/skill/PATH'i onarır, config tamamsa relay'i yeniden başlatır, doktoru çalıştırır.
 #
 # Bağımlılık yok: pipx varsa onunla, yoksa bu klasöre işaret eden bir sarmalayıcı betikle kurar.
@@ -14,10 +15,11 @@ CFG_DIR="$HOME/.config/peerlink"
 CFG="$CFG_DIR/config.json"
 SKILL_DST="$HOME/.claude/skills/peerlink"
 
-SECRET="" LABEL="" PEERS=() PORT=7437 START=1
+SECRET="" LABEL="" PEERS=() PORT=7437 START=1 AUTOSTART=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-start) START=0; shift ;;
+    --autostart) AUTOSTART=1; shift ;;
     --secret) SECRET="$2"; shift 2 ;;
     --peer)   PEERS+=("$2"); shift 2 ;;
     --label)  LABEL="$2"; shift 2 ;;
@@ -112,7 +114,7 @@ sys.exit(0 if ok else 1)
 PY
 then
   echo
-  "$PL" restart || true
+  if [ "$AUTOSTART" = 1 ]; then "$PL" autostart on || true; else "$PL" restart || true; fi
   echo
   "$PL" doctor || true
 else

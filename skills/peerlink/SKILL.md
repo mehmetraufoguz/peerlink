@@ -6,7 +6,7 @@ compatibility: Claude Code on macOS/Linux; python3 3.9+, git, curl; peers on the
 metadata:
   author: mehmetraufoguz
   repo: https://github.com/mehmetraufoguz/peerlink
-  version: "0.3"
+  version: "0.4"
 ---
 
 # peerlink: LAN üzerinden oturumlar arası mesajlaşma
@@ -65,7 +65,10 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 |---|---|---|
 | `ensure.sh --check` → 3 | kod yok, sadece skill kurulu | 1. adım |
 | `doctor`: config yok / secret örnek değer / peers boş | kurulum yarım | `ensure.sh --secret ... --peer ... --label ...` (kullanıcı çalıştırır) |
-| `doctor`: relay DOWN | relay başlatılmamış | `peerlink up -d`; kalıcı için README'deki launchd örneği |
+| `doctor`: relay DOWN | relay başlatılmamış | `peerlink up -d`; kalıcı için `peerlink autostart on` |
+| `doctor`: autostart kapalı | relay yeniden başlatmada ölür | `peerlink autostart on` (macOS; `~/Documents` altındaki repo için `~/.peerlink` çalışma kopyası oluşturur) |
+| yeni sürüm çıktı / "güncelle" | eski kod çalışıyor | `peerlink update` (git pull + kurulum + relay restart); her iki makinede |
+| eşin IP'si değişti | DHCP yeni adres verdi | `peers` listesinde IP yerine Bonjour adı kullan: `--peer <Ad>.local`; adı karşı makinede `hostname` verir |
 | config değişti (yeni eş, yeni anahtar, etiket) | çalışan relay eski config'i kullanıyor | `ensure.sh --secret ... --peer ... --label ...` yeniden yazar ve relay'i yeniden başlatır; yalnızca yeniden başlatmak için `peerlink restart` |
 | `peerlink up`: "relay zaten çalışıyor" | ikinci kez başlatılmaya çalışıldı | hata değil; config değiştiyse `peerlink restart`, durdurmak için `peerlink down` |
 | eş `401` | iki makinede farklı secret | config'leri karşılaştır, anahtarı tekrar yaz |
@@ -94,7 +97,8 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 - Proxy = `~/.claude/sessions/<pid>.json` (içinde `peerlinkProxy`) + `/tmp/cc-socks/<pid>.sock` + `.key`.
 - Relay HTTP: `GET /health` (anahtarsız), `GET /sessions`, `POST /deliver`; başlık `X-Peerlink-Secret`; port 7437.
 - Config: `~/.config/peerlink/config.json` → `secret`, `peers` (liste, `HOST[:PORT]`), `label`, `port`, `bind`, `advertise`, `interval`.
-- Yaşam döngüsü: `peerlink up -d` (arka plan, log `~/.peerlink.log`, pid `~/.config/peerlink/relay.pid`), `peerlink down`, `peerlink restart`.
+- Yaşam döngüsü: `peerlink up -d` (arka plan, log `~/.peerlink.log`, pid `~/.config/peerlink/relay.pid`), `peerlink down`, `peerlink restart`,
+  `peerlink autostart on|off|status` (macOS launchd, `~/Library/LaunchAgents/com.peerlink.plist`), `peerlink update`.
   `ensure.sh`/`install.sh` her çalıştırmada idempotenttir: CLI, skill ve PATH'i onarır, config tamamsa relay'i yeniden başlatır, doktoru çalıştırır.
 - `peers` statik bir listedir; her giriş tek bir makinedir, aralık/CIDR yok. Yeni makine = yeni giriş + relay yeniden başlat.
 - Protokol belgelenmemiş, Claude Code 2.1.296 ile test edildi. Ayrıntı: repo `docs/PROTOCOL.md`.
