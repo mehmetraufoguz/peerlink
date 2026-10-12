@@ -11,3 +11,5 @@ Bağımlılık yok, Python 3.9+. Çalıştır: `python3 -m peerlink <komut>` vey
   loopback relay ile gidiş-dönüş doğrular. Çalıştırma adımları `docs/TESTING.md`.
 - Skill: `skills/peerlink/SKILL.md`; `install.sh` bunu `~/.claude/skills/` altına symlink'ler.
 - Gizli anahtar hiçbir zaman loga veya çıktıya yazılmaz.
+- Commit mesajları Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`; kırıcı değişiklikte
+  `!` ve `BREAKING CHANGE:` gövdesi. Özet satırı İngilizce, emirsiz, 72 karakter altı.
