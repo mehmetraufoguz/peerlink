@@ -5,7 +5,7 @@ Tüm komutlar repo kökünden.
 
 ```bash
 # 1) relay, kendi kendine eş (loopback)
-python3 -m agent_relay_peer relay --secret test --peer 127.0.0.1:7437 --bind 127.0.0.1 --label remote --interval 2 &
+python3 -m peerlink up --secret test --peer 127.0.0.1:7437 --bind 127.0.0.1 --label remote --interval 2 &
 
 # 2) iki sahte oturum (gelen her çerçeveyi scripts/probe.log'a yazar)
 python3 scripts/probe_listener.py --name LAN-PROBE &
@@ -17,7 +17,7 @@ python3 scripts/roundtrip_test.py
 
 # 4) temizlik
 kill %1 %2 %3
-python3 -m agent_relay_peer clean
+python3 -m peerlink clean
 ```
 
 Beklenen çıktı:

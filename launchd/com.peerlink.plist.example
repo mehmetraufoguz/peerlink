@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Relay'i oturum açılışında başlatmak için:
+     cp launchd/com.peerlink.plist.example ~/Library/LaunchAgents/com.peerlink.plist
+     (peerlink yolunu `which peerlink` ile düzelt)
+     launchctl load ~/Library/LaunchAgents/com.peerlink.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.peerlink</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGE_ME/.local/bin/peerlink</string>
+    <string>relay</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/peerlink.log</string>
+  <key>StandardErrorPath</key><string>/tmp/peerlink.log</string>
+</dict>
+</plist>

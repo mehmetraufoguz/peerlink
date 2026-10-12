@@ -18,7 +18,7 @@ Her oturum `~/.claude/sessions/<pid>.json` yazar:
 ```
 
 - `procStart` = `TZ=UTC ps -o lstart= -p <pid>` çıktısı. Eşleşmezse kayıt stale sayılır.
-- Bilinmeyen ek alanlar (`agentRelayProxy`) yok sayılır.
+- Bilinmeyen ek alanlar (`peerlinkProxy`) yok sayılır.
 - Yanında `<pid>.<sha256(messagingSocketPath)>.key` dosyası: `{"peerToken":"<32 hex>","procStart":"...","pidDomain":"darwin"}`, mod 600.
 - Socket dizini beyaz listede olmalı: `/tmp/cc-socks(-N)?`, `/private/tmp/cc-socks(-N)?`, `/run/user/<uid>/cc-socks`.
 

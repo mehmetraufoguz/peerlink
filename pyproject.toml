@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-relay-peer"
+name = "peerlink"
 version = "0.1.0"
 description = "Claude Code oturumlarını LAN üzerinden birbirine bağlayan relay (uzak oturumlar yerel peer gibi görünür)"
 readme = "README.md"
@@ -14,7 +14,7 @@ keywords = ["claude-code", "agents", "relay", "lan", "cross-session"]
 dependencies = []
 
 [project.scripts]
-agent-relay = "agent_relay_peer.relay:main"
+peerlink = "peerlink.relay:main"
 
 [tool.setuptools]
-packages = ["agent_relay_peer"]
+packages = ["peerlink"]

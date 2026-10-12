@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent-relay-peer — Claude Code oturumlarını LAN üzerinden birbirine bağlayan relay.
+peerlink — Claude Code oturumlarını LAN üzerinden birbirine bağlayan relay.
 
 Her makinede bir relay çalışır. Relay, eş makinelerdeki oturumları periyodik olarak sorar
 ve her uzak oturum için YEREL bir "proxy oturum" (sahte peer) kaydeder:
@@ -11,19 +11,18 @@ karşı relay onu gerçek oturumun Unix socket'ine native protokolle teslim eder
 Cevaplar aynı yolu ters yönde izler (from alanı her iki tarafta proxy yoluna yeniden yazılır).
 
 Komutlar:
-  agent-relay relay     [--secret S] [--peer HOST[:PORT]]... [--port 7437] [--label NAME]
-  agent-relay status    yerel relay çalışıyor mu, eşler erişilebilir mi, hangi proxy'ler var
-  agent-relay sessions  --host HOST       uzak makinedeki oturumları listele
-  agent-relay send      --host HOST --to "oturum adı" "metin"   proxy'siz tek seferlik gönderim
-  agent-relay clean     ölü proxy kayıtlarını temizle
-  agent-relay proxy     (dahili; relay tarafından spawn edilir)
+  peerlink up      relay'i başlat   [--secret S] [--peer HOST[:PORT]]... [--port 7437] [--label NAME]
+  peerlink who     kim var: relay durumu, yerel oturumlar, proxy'ler, eşlerdeki oturumlar  [--host HOST]
+  peerlink send    macB/"Oturum adı" "metin"   proxy'siz tek seferlik gönderim (cevap dönmez)
+  peerlink clean   ölü proxy kayıtlarını temizle
+  peerlink proxy   (dahili; relay tarafından spawn edilir)
 
-Yapılandırma: ~/.config/agent-relay-peer/config.json
+Yapılandırma: ~/.config/peerlink/config.json
   {"secret": "...", "peers": ["192.168.1.20"], "label": "macA", "port": 7437,
    "bind": "0.0.0.0", "advertise": null, "interval": 5}
-CLI argümanları dosyayı, AGENT_RELAY_SECRET ortam değişkeni secret alanını geçersiz kılar.
+CLI argümanları dosyayı, PEERLINK_SECRET ortam değişkeni secret alanını geçersiz kılar.
 
-Güvenlik: paylaşılan gizli anahtar (X-Agent-Relay-Secret başlığı). HTTP düz metin — yalnızca
+Güvenlik: paylaşılan gizli anahtar (X-Peerlink-Secret başlığı). HTTP düz metin — yalnızca
 güvendiğin LAN'da kullan; istersen önüne bir TLS reverse proxy koy.
 """
 import argparse, glob, hashlib, http.client, json, os, re, secrets, signal, socket, subprocess, sys, threading, time, urllib.parse, uuid
@@ -33,9 +32,9 @@ __version__ = "0.1.0"
 
 SESS_DIR = os.path.expanduser("~/.claude/sessions")
 SOCK_DIR = "/tmp/cc-socks"
-PROXY_MARK = "agentRelayProxy"
-SECRET_HEADER = "X-Agent-Relay-Secret"
-CONFIG_PATH = os.path.expanduser("~/.config/agent-relay-peer/config.json")
+PROXY_MARK = "peerlinkProxy"
+SECRET_HEADER = "X-Peerlink-Secret"
+CONFIG_PATH = os.path.expanduser("~/.config/peerlink/config.json")
 DEFAULT_PORT = 7437
 HOSTNAME = socket.gethostname().split(".")[0]
 CLAUDE_VERSION_TESTED = "2.1.296"
@@ -122,7 +121,7 @@ def make_frame(content: str, from_path: str, msg_id=None):
             "message": {"role": "user", "content": content}, "priority": "next", "from": f"uds:{from_path}"}
 
 
-def wrap_content(text: str, from_path: str, from_name: str, from_session="agent-relay") -> str:
+def wrap_content(text: str, from_path: str, from_name: str, from_session="peerlink") -> str:
     return (f'<cross-session-message from="uds:{from_path}" from-session="{from_session}" '
             f'from-name="{from_name}" from-mode="prompting">\n{text}\n</cross-session-message>')
 
@@ -322,7 +321,7 @@ class Relay:
                 px = self.proxy_sock_for(label, o["pid"])
                 if px: break
                 time.sleep(0.1)
-        from_path = px["sock"] if px else f"{SOCK_DIR}/agent-relay-noreply.sock"
+        from_path = px["sock"] if px else f"{SOCK_DIR}/peerlink-noreply.sock"
         from_name = self.proxy_name(o.get("label", o.get("host") or "remote"), o["name"])
         content = rewrite_from(body["content"], from_path, from_name)
         deliver_local(target, make_frame(content, from_path, body.get("msg_id")))
@@ -372,52 +371,82 @@ class Relay:
 
 
 # ---------------------------------------------------------------- one-shot CLI
-def cmd_status(a, cfg):
+def need_secret(a, cfg):
+    return resolve(a, cfg, "secret", env="PEERLINK_SECRET") or sys.exit("secret gerekli (--secret / config / PEERLINK_SECRET)")
+
+
+def peer_list(a, cfg):
+    return resolve(a, cfg, "peer", []) or cfg.get("peers", [])
+
+
+def print_sessions(sessions, indent="  "):
+    for s in sessions:
+        print(f"{indent}{s['pid']:>6}  {s['status'] or '-':<6} {s['name']}")
+
+
+def cmd_who(a, cfg):
+    """Kim var? Yerel relay, yerel oturumlar, proxy'ler ve eşlerdeki oturumlar."""
     port = resolve(a, cfg, "port", DEFAULT_PORT)
-    secret = resolve(a, cfg, "secret", env="AGENT_RELAY_SECRET")
-    print(f"config: {CONFIG_PATH if os.path.exists(CONFIG_PATH) else '(yok)'}")
+    secret = resolve(a, cfg, "secret", env="PEERLINK_SECRET")
+    if a.host:  # yalnızca uzak makine
+        h, prt = split_host(a.host, port)
+        r = http_json(h, prt, secret or sys.exit("secret gerekli"), "GET", "/sessions")
+        print(f"{r.get('label')} ({h}:{prt}):"); print_sessions(r["sessions"]); return
     try:
-        h = http_json("127.0.0.1", port, secret or "", "GET", "/health", timeout=2)
-        print(f"local relay: UP  label={h['label']} v{h['version']} peers={h['peers']} proxies={h['proxies']}")
+        h = http_json("127.0.0.1", port, "", "GET", "/health", timeout=2)
+        print(f"relay: UP  label={h['label']} v{h['version']} peers={h['peers']} proxies={h['proxies']}")
     except Exception as e:
-        print(f"local relay: DOWN on 127.0.0.1:{port} ({e.__class__.__name__})")
+        print(f"relay: DOWN on 127.0.0.1:{port} ({e.__class__.__name__})  -> 'peerlink up' ile başlat")
     sess = local_sessions(include_proxies=True)
     real = [s for s in sess if not s["proxy"]]; prox = [s for s in sess if s["proxy"]]
-    print(f"\nlocal sessions ({len(real)}):")
-    for s in real: print(f"  {s['pid']:>6}  {s['status'] or '-':<6} {s['name']}")
-    print(f"\nremote proxies ({len(prox)}):")
-    for s in prox: print(f"  {s['pid']:>6}  {s['status'] or '-':<6} {s['name']}   <- {s['proxy']['host']}:{s['proxy']['port']} pid {s['proxy']['remotePid']}")
-    peers = resolve(a, cfg, "peer", []) or cfg.get("peers", [])
-    if peers and secret:
+    print(f"\nlocal ({len(real)}):"); print_sessions(real)
+    print(f"\nremote via proxy ({len(prox)}):")
+    for s in prox:
+        print(f"  {s['pid']:>6}  {s['status'] or '-':<6} {s['name']}   <- {s['proxy']['host']}:{s['proxy']['port']} pid {s['proxy']['remotePid']}")
+    peers = peer_list(a, cfg)
+    if peers:
         print("\npeers:")
-        for p in peers:
-            h, prt = split_host(p, port)
+        for pth in peers:
+            h, prt = split_host(pth, port)
             try:
-                r = http_json(h, prt, secret, "GET", "/sessions", timeout=3)
-                print(f"  {h}:{prt}  UP  label={r['label']}  sessions={len(r['sessions'])}")
+                r = http_json(h, prt, secret or "", "GET", "/sessions", timeout=3)
+                print(f"  {h}:{prt}  UP  label={r['label']}"); print_sessions(r["sessions"], indent="      ")
             except Exception as e:
                 print(f"  {h}:{prt}  DOWN ({e})")
 
 
-def cmd_sessions(a, cfg):
-    secret = resolve(a, cfg, "secret", env="AGENT_RELAY_SECRET") or sys.exit("secret gerekli (--secret / config / AGENT_RELAY_SECRET)")
-    h, prt = split_host(a.host, resolve(a, cfg, "port", DEFAULT_PORT))
-    r = http_json(h, prt, secret, "GET", "/sessions")
-    print(f"[{r.get('label')}]")
-    for s in r["sessions"]: print(f"  {s['pid']:>6}  {s['status'] or '-':<6} {s['name']}   ({s['cwd']})")
+def resolve_target(a, cfg):
+    """'label/isim' veya --host + isim -> (host, port, relay_sessions, hedef)."""
+    port = resolve(a, cfg, "port", DEFAULT_PORT); secret = need_secret(a, cfg)
+    name = a.to
+    if a.host:
+        h, prt = split_host(a.host, port)
+        r = http_json(h, prt, secret, "GET", "/sessions")
+    elif "/" in a.to:
+        label, name = a.to.split("/", 1)
+        for pth in peer_list(a, cfg):
+            h, prt = split_host(pth, port)
+            try: r = http_json(h, prt, secret, "GET", "/sessions", timeout=3)
+            except Exception: continue
+            if r.get("label") == label: break
+        else:
+            sys.exit(f"'{label}' etiketli eş bulunamadı. Eşler: {peer_list(a, cfg) or '(config yok)'}")
+    else:
+        sys.exit("hedefi 'etiket/oturum adı' olarak ver ya da --host kullan")
+    t = find_session(r["sessions"], name)
+    if not t: sys.exit(f"'{name}' için tek eşleşme yok. Oturumlar: {[s['name'] for s in r['sessions']]}")
+    return h, prt, secret, t
 
 
 def cmd_send(a, cfg):
-    secret = resolve(a, cfg, "secret", env="AGENT_RELAY_SECRET") or sys.exit("secret gerekli (--secret / config / AGENT_RELAY_SECRET)")
-    h, prt = split_host(a.host, resolve(a, cfg, "port", DEFAULT_PORT))
-    r = http_json(h, prt, secret, "GET", "/sessions")
-    t = find_session(r["sessions"], a.to)
-    if not t: sys.exit(f"'{a.to}' için tek eşleşme yok. Oturumlar: {[s['name'] for s in r['sessions']]}")
+    """Proxy'siz tek seferlik gönderim (cevap yolu yoktur)."""
+    h, prt, secret, t = resolve_target(a, cfg)
     label = resolve(a, cfg, "label", HOSTNAME)
-    content = wrap_content(a.text, f"{SOCK_DIR}/agent-relay-noreply.sock", f"{label}/cli")
+    content = wrap_content(a.text, f"{SOCK_DIR}/peerlink-noreply.sock", f"{label}/cli")
     body = {"to_pid": t["pid"], "content": content,
             "origin": {"host": "", "port": 0, "pid": None, "name": "cli", "label": label}}
-    print(http_json(h, prt, secret, "POST", "/deliver", body))
+    r = http_json(h, prt, secret, "POST", "/deliver", body)
+    print(f"-> {t['name']} @ {h}:{prt}: {'ok' if r.get('ok') else r}")
 
 
 def cmd_clean(a, cfg):
@@ -432,9 +461,9 @@ def cmd_clean(a, cfg):
     print(f"removed {n} stale proxy file(s)")
 
 
-def cmd_relay(a, cfg):
-    a.secret = resolve(a, cfg, "secret", env="AGENT_RELAY_SECRET") or sys.exit("secret gerekli (--secret / config / AGENT_RELAY_SECRET)")
-    a.peer = resolve(a, cfg, "peer", []) or cfg.get("peers", [])
+def cmd_up(a, cfg):
+    a.secret = need_secret(a, cfg)
+    a.peer = peer_list(a, cfg)
     a.port = int(resolve(a, cfg, "port", DEFAULT_PORT))
     a.bind = resolve(a, cfg, "bind", "0.0.0.0")
     a.label = resolve(a, cfg, "label", HOSTNAME)
@@ -450,30 +479,35 @@ def cmd_relay(a, cfg):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="agent-relay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="peerlink", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None, help=f"yapılandırma dosyası (varsayılan {CONFIG_PATH})")
-    ap.add_argument("--version", action="version", version=f"agent-relay-peer {__version__}")
+    ap.add_argument("--version", action="version", version=f"peerlink {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("relay", help="relay'i başlat"); r.add_argument("--secret"); r.add_argument("--peer", action="append", default=[])
-    r.add_argument("--port", type=int); r.add_argument("--bind"); r.add_argument("--advertise", help="bu makinenin LAN IP'si")
-    r.add_argument("--label"); r.add_argument("--interval", type=float)
+    def common(sp):
+        sp.add_argument("--secret"); sp.add_argument("--port", type=int); sp.add_argument("--peer", action="append", default=[])
+        return sp
+
+    up = common(sub.add_parser("up", help="relay'i başlat; uzak oturumlar ListAgents'ta görünür"))
+    up.add_argument("--bind"); up.add_argument("--advertise", help="bu makinenin LAN IP'si"); up.add_argument("--label"); up.add_argument("--interval", type=float)
+
+    who = common(sub.add_parser("who", help="kim var: relay durumu, yerel oturumlar, proxy'ler, eşler"))
+    who.add_argument("--host", help="yalnızca bu uzak makinenin oturumlarını listele")
+
+    send = common(sub.add_parser("send", help="tek seferlik mesaj: peerlink send macB/\"Oturum adı\" \"metin\""))
+    send.add_argument("--host", help="etiket yerine doğrudan uzak relay adresi"); send.add_argument("--label")
+    send.add_argument("to", help="'etiket/oturum adı' (veya --host ile yalnızca ad)"); send.add_argument("text")
+
+    sub.add_parser("clean", help="ölü proxy kayıtlarını sil")
 
     p = sub.add_parser("proxy")
     for f in ("--name", "--remote-host", "--remote-name", "--remote-label", "--secret", "--local-host", "--label"): p.add_argument(f, required=True)
     p.add_argument("--remote-port", type=int, required=True); p.add_argument("--remote-pid", type=int, required=True)
     p.add_argument("--local-port", type=int, required=True); p.add_argument("--interval", type=float, default=5)
 
-    st = sub.add_parser("status", help="durum"); st.add_argument("--secret"); st.add_argument("--port", type=int); st.add_argument("--peer", action="append", default=[])
-    s = sub.add_parser("sessions", help="uzak oturumları listele"); s.add_argument("--secret"); s.add_argument("--host", required=True); s.add_argument("--port", type=int)
-    d = sub.add_parser("send", help="tek seferlik mesaj"); d.add_argument("--secret"); d.add_argument("--host", required=True); d.add_argument("--port", type=int)
-    d.add_argument("--label"); d.add_argument("--to", required=True); d.add_argument("text")
-    sub.add_parser("clean", help="ölü proxy kayıtlarını sil")
-
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
-    {"relay": cmd_relay, "proxy": lambda a, c: cmd_proxy(a), "status": cmd_status, "sessions": cmd_sessions,
-     "send": cmd_send, "clean": cmd_clean}[a.cmd](a, cfg)
+    {"up": cmd_up, "who": cmd_who, "send": cmd_send, "clean": cmd_clean, "proxy": lambda a, c: cmd_proxy(a)}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":

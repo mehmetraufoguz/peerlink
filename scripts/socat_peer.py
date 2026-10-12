@@ -13,7 +13,7 @@ Bu makinede (A):
 Not: Gönderen, token'ı YEREL key dosyasından okuyup uzak oturuma yollar; o yüzden
 uzak oturumun gerçek token'ı buraya kopyalanmak zorunda. Çerçevedeki from="uds:/tmp/cc-socks/<A pid>.sock"
 yeniden yazılmadığı için uzak taraf cevap veremez (A'daki yol B'de yok). Bu yüzden
-üretimde socat değil, agent-relay relay tercih edilmeli.
+üretimde socat değil, peerlink up tercih edilmeli.
 """
 import argparse, hashlib, json, os, signal, subprocess, sys, time
 
