@@ -23,20 +23,57 @@ Proxy'ye yazılan çerçeve HTTP ile karşı relay'e gider; karşı relay onu he
 native protokolle teslim eder. Teslimatta `from` alanı, gönderenin karşı taraftaki proxy'sine yeniden
 yazılır; cevap bu sayede aynı yoldan döner. Proxy'ler hedefin idle/busy durumunu da aynalar.
 
-## Kurulum
+## Hızlı başlangıç (iki makine)
+
+Her iki makinede de aynı gizli anahtar, karşı tarafın IP'si ve makineye özgü bir etiket gerekir. Etiket,
+uzak oturumların `ListAgents` çıktısında nasıl görüneceğini belirler (`macB/Super Frontend`).
 
 ```bash
-git clone <repo> && cd peerlink
-./install.sh          # peerlink CLI (pipx/pip --user) + ~/.claude/skills/peerlink symlink + config taslağı
+# bir kez, herhangi bir makinede: ortak gizli anahtar üret
+openssl rand -hex 24
 ```
 
-Kurulum yapmadan da çalışır: `python3 -m peerlink <komut>`.
-
-`~/.config/peerlink/config.json` dosyasını doldur (her makinede aynı `secret`, karşı makinenin IP'si `peers` içinde):
-
-```json
-{ "secret": "uzun-rastgele-anahtar", "peers": ["192.168.1.20"], "label": "macA", "port": 7437 }
+```bash
+# Makine A (192.168.1.10)
+curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
+  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.20 --label macA
+peerlink up
 ```
+
+```bash
+# Makine B (192.168.1.20)
+curl -fsSL https://raw.githubusercontent.com/mehmetraufoguz/peerlink/main/bootstrap.sh \
+  | bash -s -- --secret <ANAHTAR> --peer 192.168.1.10 --label macB
+peerlink up
+```
+
+`bootstrap.sh` repoyu `~/.peerlink` altına klonlar (veya günceller) ve `install.sh`'i çalıştırır:
+`~/.local/bin/peerlink` komutu, `~/.claude/skills/peerlink` skill symlink'i ve
+`~/.config/peerlink/config.json`. Bağımlılık yok; pipx varsa onu kullanır, yoksa klona işaret eden bir
+sarmalayıcı yazar. Python 3.9+ ve git yeter.
+
+`peerlink up` ön planda çalışır; arka plan için `nohup peerlink up > ~/.peerlink.log 2>&1 &` ya da
+[launchd/com.peerlink.plist.example](launchd/com.peerlink.plist.example). Birkaç saniye sonra `peerlink who`
+eşi `UP` göstermeli.
+
+### Karşı makinedeki Claude oturumunun yapması gereken bir şey yok
+
+Relay çalıştığı sürece oradaki her oturum otomatik olarak bu makinede `macB/<ad>` olarak görünür;
+oturumun yeniden başlatılması, bir ayar açılması veya skill kurulması gerekmez. Skill yalnızca mesajı
+**gönderen** tarafın Claude'una yardım eder: uzak oturumları nasıl bulacağını ve relay'i nasıl teşhis
+edeceğini bilir. Alıcı taraf mesajı yerel bir peer'dan gelmiş gibi alır.
+
+Oturumlara ad vermek işi kolaylaştırır: `claude --name "API"` ya da oturum içinde `/rename API`. Adsız
+oturumlar `session-<pid>` olarak listelenir.
+
+### Elle kurulum
+
+```bash
+git clone https://github.com/mehmetraufoguz/peerlink.git && cd peerlink
+./install.sh --secret <ANAHTAR> --peer 192.168.1.20 --label macA   # argümansız: config'e dokunmaz
+```
+
+Kurulum yapmadan da çalışır: `python3 -m peerlink <komut>` (repo kökünden).
 
 ## Kullanım
 
@@ -49,8 +86,7 @@ peerlink clean                                   # ölü proxy kayıtlarını te
 ```
 
 Relay çalıştıktan birkaç saniye sonra bir Claude Code oturumunda `ListAgents` çağır; `macB/...` satırları
-belirir. `SendMessage` ile adı aynen kullanarak yaz. Oturum açılışında otomatik başlatmak için
-[launchd/com.peerlink.plist.example](launchd/com.peerlink.plist.example).
+belirir. `SendMessage` ile adı aynen kullanarak yaz.
 
 Tek makinede deneme için relay kendi kendine eş olabilir:
 

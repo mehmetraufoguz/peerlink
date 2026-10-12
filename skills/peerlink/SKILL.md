@@ -27,7 +27,9 @@ peerlink who
 
 - `local relay: DOWN` → relay çalışmıyor. Yapılandırma varsa `peerlink up` ile başlat
   (arka planda: `nohup peerlink up > ~/.peerlink.log 2>&1 &`). Yapılandırma yoksa kullanıcıdan
-  eş IP'si ve paylaşılan gizli anahtarı iste; `~/.config/peerlink/config.json` örneği README'de.
+  eş IP'si ve paylaşılan gizli anahtarı iste, sonra `install.sh --secret <S> --peer <IP> --label <ad>`
+  (veya repo yoksa README'deki `bootstrap.sh` tek satırı) ile yaz. Gizli anahtar sohbette görünmesin:
+  kullanıcı komutu kendisi çalıştırsın.
 - `peers: ... DOWN` → karşı makinede relay kapalı, IP yanlış, port kapalı veya gizli anahtar farklı (401).
   Bunu kullanıcıya söyle; karşı makineye kendin erişemezsin.
 - `remote proxies (0)` ama eş UP → birkaç saniye bekle (reconcile aralığı varsayılan 5 s), sonra `ListAgents` tekrarla.
