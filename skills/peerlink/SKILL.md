@@ -65,7 +65,9 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 |---|---|---|
 | `ensure.sh --check` → 3 | kod yok, sadece skill kurulu | 1. adım |
 | `doctor`: config yok / secret örnek değer / peers boş | kurulum yarım | `ensure.sh --secret ... --peer ... --label ...` (kullanıcı çalıştırır) |
-| `doctor`: relay DOWN | `peerlink up` çalışmıyor | `peerlink up -d`; kalıcı için README'deki launchd örneği |
+| `doctor`: relay DOWN | relay başlatılmamış | `peerlink up -d`; kalıcı için README'deki launchd örneği |
+| config değişti (yeni eş, yeni anahtar, etiket) | çalışan relay eski config'i kullanıyor | `ensure.sh --secret ... --peer ... --label ...` yeniden yazar ve relay'i yeniden başlatır; yalnızca yeniden başlatmak için `peerlink restart` |
+| `peerlink up`: "relay zaten çalışıyor" | ikinci kez başlatılmaya çalışıldı | hata değil; config değiştiyse `peerlink restart`, durdurmak için `peerlink down` |
 | eş `401` | iki makinede farklı secret | config'leri karşılaştır, anahtarı tekrar yaz |
 | eş zaman aşımı | IP yanlış, makine kapalı, güvenlik duvarı 7437'yi kesiyor | karşı makinede `peerlink doctor`; macOS güvenlik duvarında python3'e gelen bağlantı izni; `ping` ile IP doğrula |
 | eş bağlantı reddedildi | makine açık ama relay kapalı | karşı makinede `peerlink up` (bunu sen yapamazsın, kullanıcıya söyle) |
@@ -92,5 +94,7 @@ Relay bu makinede çalışmadan tek seferlik göndermek için (cevap dönmez):
 - Proxy = `~/.claude/sessions/<pid>.json` (içinde `peerlinkProxy`) + `/tmp/cc-socks/<pid>.sock` + `.key`.
 - Relay HTTP: `GET /health` (anahtarsız), `GET /sessions`, `POST /deliver`; başlık `X-Peerlink-Secret`; port 7437.
 - Config: `~/.config/peerlink/config.json` → `secret`, `peers` (liste, `HOST[:PORT]`), `label`, `port`, `bind`, `advertise`, `interval`.
+- Yaşam döngüsü: `peerlink up -d` (arka plan, log `~/.peerlink.log`, pid `~/.config/peerlink/relay.pid`), `peerlink down`, `peerlink restart`.
+  `ensure.sh`/`install.sh` her çalıştırmada idempotenttir: CLI, skill ve PATH'i onarır, config tamamsa relay'i yeniden başlatır, doktoru çalıştırır.
 - `peers` statik bir listedir; her giriş tek bir makinedir, aralık/CIDR yok. Yeni makine = yeni giriş + relay yeniden başlat.
 - Protokol belgelenmemiş, Claude Code 2.1.296 ile test edildi. Ayrıntı: repo `docs/PROTOCOL.md`.
