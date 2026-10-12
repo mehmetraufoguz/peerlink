@@ -36,7 +36,20 @@ EOF
   chmod +x "$BIN/peerlink"
   echo "cli:    $BIN/peerlink -> $HERE (sarmalayıcı)"
 fi
-case ":$PATH:" in *":$BIN:"*) ;; *) echo "uyarı:  $BIN PATH'te değil; kabuk rc dosyana ekle: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
+case ":$PATH:" in
+  *":$BIN:"*) ;;
+  *)
+    # ~/.local/bin PATH'te değil: kabuk rc dosyasına bir kez ekle (zsh ve bash)
+    LINE='export PATH="$HOME/.local/bin:$PATH"  # peerlink'
+    ADDED=""
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+      if ! grep -qs '\.local/bin' "$rc"; then printf '\n%s\n' "$LINE" >> "$rc"; ADDED="$ADDED $rc"; fi
+    done
+    [ -n "$ADDED" ] && echo "path:   $BIN PATH'e eklendi ($ADDED); bu terminalde etkinleştir:  source ~/.zshrc" \
+                    || echo "path:   $BIN PATH'te değil; yeni bir terminal aç ya da:  source ~/.zshrc"
+    export PATH="$BIN:$PATH"
+    ;;
+esac
 
 # 2) Skill
 mkdir -p "$HOME/.claude/skills"

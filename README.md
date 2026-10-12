@@ -52,7 +52,7 @@ peerlink up
 ```
 
 `bootstrap.sh` repoyu `~/.peerlink` altına klonlar (veya günceller) ve `install.sh`'i çalıştırır:
-`~/.local/bin/peerlink` komutu, `~/.claude/skills/peerlink` skill symlink'i ve
+`~/.local/bin/peerlink` komutu (PATH'te değilse `~/.zshrc`/`~/.bashrc`'ye bir kez eklenir), `~/.claude/skills/peerlink` skill symlink'i ve
 `~/.config/peerlink/config.json`. Bağımlılık yok; pipx varsa onu kullanır, yoksa klona işaret eden bir
 sarmalayıcı yazar. Python 3.9+ ve git yeter.
 
